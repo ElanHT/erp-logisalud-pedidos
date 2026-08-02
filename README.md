@@ -74,3 +74,5 @@ supabase/migrations/  tests/  docs/
   supuestos de negocio pendientes de validar.
 - [CLAUDE.md](CLAUDE.md) — guía para trabajar en este repo con Claude
   Code.
+
+<!-- sanity check: verificando que main exige CI verde antes de mergear -->
