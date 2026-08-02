@@ -92,7 +92,90 @@ rastreable. Ver resumen de supuestos.
     `tax_configurations` en cada consulta).
 
 Seed: producto de ejemplo `Dapha 10` (`codigo_interno = 'DAPHA10-EJ'`)
-como `INAFECTO`, asociado a Diphasac. Ver supuestos.
+como `INAFECTO`, asociado a Diphasac. Ver supuestos. **Superado por
+datos reales**: al importar la lista real de Diphasac, el "Dapha 10"
+real llega con su propio código (`DHP106`) como un producto distinto —
+el placeholder `DAPHA10-EJ` queda huérfano y se desactiva (ver
+importador de listas de precios, abajo).
+
+## Importador de listas de precios (Excel de proveedor)
+
+Sección 8 del PRD. Flujo de 3 pasos: **preview** (parsea el Excel,
+valida, no toca la base) → **validación** (se muestra al admin) →
+**publicar** (solo tras confirmación explícita, escribe todo en una
+transacción). El parser en sí es dominio puro
+(`domain/price-list-import.ts`, sin dependencia de Excel ni de
+Supabase) — lee el archivo `services/price-lists.ts` con `exceljs`.
+
+### Tablas nuevas
+
+- `price_lists`: una fila por **importación/publicación** de un
+  proveedor (no una por canal — el Excel trae los 6 canales en un solo
+  archivo). Versionado igual que `product_tax_profiles`: un índice
+  único parcial permite solo una lista activa (`fecha_fin is null`) por
+  proveedor, y un trigger `BEFORE INSERT` cierra la anterior al
+  publicar una nueva. Reimportar el mismo proveedor **nunca sobrescribe**
+  — crea una versión nueva. Guarda `archivo_nombre` y
+  `archivo_storage_path` (bucket privado `price-lists` en Supabase
+  Storage, accedido solo desde el cliente admin server-side — sin
+  policies de `storage.objects` porque no hay acceso directo desde el
+  navegador) e `importado_por`.
+- `price_list_items`: precio por `(price_list_id, product_id,
+  sales_channel_id)`. Es lo que diferencia por canal dentro de una
+  misma lista/versión.
+- `pedidos.publish_price_list(...)`: función `SECURITY INVOKER` (no
+  definer) que hace todo el publish —upsert de products, insert
+  versionado de product_tax_profiles, insert de price_list_items— en
+  una sola transacción de Postgres. Al ser invoker, las políticas RLS
+  de administrador de cada tabla se siguen aplicando normalmente; no
+  duplica ese chequeo.
+
+### Columnas nuevas en `products` / `product_tax_profiles`
+
+- `products.codigo_bonificacion`: viene del Excel ("CÓDIGO
+  BONIFICACIÓN"); se guarda desde ya aunque no se usa todavía
+  (promociones/bonificaciones son un paso posterior).
+- `products.principio_activo`: "PRINCIPIO ACTIVO" (Diphasac/Biosana) o
+  "COMPOSICIÓN" (Prades) — mismo campo conceptual, misma columna.
+- `product_tax_profiles.vvf_sin_igv` / `.vvd_sin_igv`: costo de
+  referencia del proveedor, no precio de venta.
+- `product_tax_profiles.costo_referencial_distribuidora`: columna "PVF
+  A DISTRIBUIDORA" del Excel. **Nunca es un price_list_item** — es
+  costo de referencia interno, no un precio de venta a ningún canal.
+  Vive versionada junto al resto del perfil tributario porque cambia
+  con cada reimportación, igual que la tasa.
+- `product_tax_profiles.fecha_vigencia_proveedor`: columna "FECHA V."
+  del Excel, guardada tal cual la entrega el proveedor. Ver el supuesto
+  explícito en [business-rules.md](business-rules.md) — no se asume
+  que sea vencimiento de lote físico.
+
+### Mapeo de columnas de canal → `sales_channels`
+
+| Columna Excel | Canal(es) |
+|---|---|
+| PVF INSTITUCIONES | Clínicas |
+| PVF SUBDISTRIB. | Subdistribuidores |
+| PVF MINICADENAS | Minicadenas |
+| PVF MAYORISTA/TOP | Mayorista **y** Tops (mismo valor, dos `price_list_items`) |
+| PVF FARMA | Horizontal |
+
+### Tratamiento tributario al importar
+
+Si VVF e IGV vienen vacíos/"-" → `INAFECTO`, tasa 0. Si tienen valor →
+`GRAVADO`, tasa = la vigente en `pedidos.tax_configurations` (no un
+número fijo por fila) — reutiliza el parámetro sembrado en Fase 2, el
+vendedor nunca elige esto.
+
+### Validación: qué bloquea publicar y qué no
+
+- **Bloquea** (error): fila sin CÓDIGO LOGISALUD; CÓDIGO LOGISALUD
+  duplicado dentro del mismo archivo (se excluyen ambas filas del
+  duplicado — no se adivina cuál es la correcta).
+- **No bloquea** (advertencia, se muestra igual): precio vacío, en cero
+  o "-" en una columna de canal → se guarda como "sin precio para ese
+  canal", no como error.
+- Filas de encabezado de sección (solo texto en la primera columna, el
+  resto vacío) se omiten silenciosamente — no son producto ni error.
 
 ## Snapshot histórico (preparación para Fase 4)
 
@@ -123,6 +206,7 @@ defecto descrito en [architecture.md](architecture.md).
 | sales_channels, suppliers, zones, payment_terms, products, product_tax_profiles, tax_configurations | lectura | lectura | lectura | lectura + escritura |
 | zone_assignments, zone_assignment_participants | lectura de las propias | lectura de todas | lectura de todas | lectura + escritura |
 | customers, customer_addresses, customer_contacts | lectura scoped a zona; insert solo `PENDIENTE_DE_VALIDACION` | lectura + escritura (aprueba/rechaza) | lectura | lectura + escritura |
+| price_lists, price_list_items | lectura | lectura | lectura | lectura + escritura (única forma de publicar) |
 
 ## Supuestos tomados por falta de dato exacto en el PRD
 
@@ -151,3 +235,15 @@ Ver también [business-rules.md](business-rules.md).
    implementadas a nivel de RLS, pero la UI para vendedor se construye
    en Fase 4 junto con la app de pedidos — por eso la pantalla de
    validación de `control_pedidos` estará vacía hasta entonces.
+6. **Códigos LOGISALUD duplicados dentro de un mismo archivo se tratan
+   como error bloqueante**, no como advertencia — el PRD pedía
+   "detectar y marcar claramente" sin decir si bloquea; se optó por
+   bloquear ambas filas del duplicado en vez de adivinar cuál vale,
+   para no resolver en silencio una inconsistencia de datos real.
+7. **"OBS." y "MASTER PACK"** del Excel de proveedor no se guardan —
+   no fueron pedidos explícitamente. Si se necesitan más adelante, es
+   una columna nueva en `products`, no un rediseño.
+8. **`price_lists.fecha_inicio`** siempre es la fecha de publicación
+   (hoy), no algo que el admin pueda elegir todavía — mantiene la
+   pantalla simple; adelantar/atrasar vigencia manualmente queda para
+   cuando se necesite.

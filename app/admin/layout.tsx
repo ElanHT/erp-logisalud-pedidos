@@ -8,6 +8,7 @@ const NAV_LINKS = [
   { href: "/admin/maestros/zonas", label: "Zonas" },
   { href: "/admin/maestros/condiciones-pago", label: "Condiciones de pago" },
   { href: "/admin/maestros/productos", label: "Productos" },
+  { href: "/admin/maestros/listas-precios", label: "Listas de precios" },
 ];
 
 export default async function AdminLayout({ children }: { children: React.ReactNode }) {
