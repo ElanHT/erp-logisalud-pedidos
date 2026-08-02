@@ -120,9 +120,19 @@ Supabase) — lee el archivo `services/price-lists.ts` con `exceljs`.
   Storage, accedido solo desde el cliente admin server-side — sin
   policies de `storage.objects` porque no hay acceso directo desde el
   navegador) e `importado_por`.
-- `price_list_items`: precio por `(price_list_id, product_id,
-  sales_channel_id)`. Es lo que diferencia por canal dentro de una
-  misma lista/versión.
+- `price_list_items`: precio por `(product_id, sales_channel_id)`,
+  versionado **por sí mismo** (`vigente_desde`/`vigente_hasta`, mismo
+  patrón que `product_tax_profiles`) y no solo por pertenecer a una
+  `price_lists`. `price_list_id` es **nullable**: una corrección puntual
+  de precio (pantalla de detalle de producto, ver más abajo) inserta
+  una fila con `price_list_id = null` — no viene de una reimportación,
+  pero igual queda versionada como cualquier otra: el trigger cierra
+  automáticamente la fila vigente anterior para ese producto+canal.
+  Esto se agregó al construir la pantalla de detalle de producto: con
+  el diseño original (versionado solo a nivel de `price_lists`), una
+  corrección de un solo canal de un solo producto habría forzado a
+  cerrar la lista completa del proveedor, afectando a todos los demás
+  productos de esa lista sin necesidad.
 - `pedidos.publish_price_list(...)`: función `SECURITY INVOKER` (no
   definer) que hace todo el publish —upsert de products, insert
   versionado de product_tax_profiles, insert de price_list_items— en
@@ -171,15 +181,41 @@ vendedor nunca elige esto.
 - **Error → se omite esa fila, el resto del archivo se publica
   igual**: fila sin CÓDIGO LOGISALUD; CÓDIGO LOGISALUD duplicado
   dentro del mismo archivo (se excluyen ambas filas del duplicado — no
-  se adivina cuál es la correcta). El admin ve estas filas marcadas en
-  el preview antes de confirmar publicar; no hace falta arreglar el
+  se adivina cuál es la correcta); fila con código pero **sin
+  descripción de producto** (`MISSING_DESCRIPTION`); código o
+  descripción que viene envuelto entre paréntesis, típico de una
+  nota/aclaración (`SUSPICIOUS_NOTE`). El admin ve estas filas marcadas
+  en el preview antes de confirmar publicar; no hace falta arreglar el
   Excel para poder cargar el resto de un catálogo válido. Se puede
   reimportar más adelante (nueva versión) una vez corregidas.
+  - Encontrado con datos reales: el Excel de Biosana traía una fila con
+    código `BSA326` pero sin descripción (un SKU sin datos completos) y
+    una fila de leyenda ("LEYENDA: VVF= Valor de Venta Farmacia") cuyo
+    texto cayó justo en la columna de código — ambas se colaban como
+    "productos" con nombre vacío antes de este refuerzo. Ver
+    business-rules.md.
 - **No se omite** (advertencia, se muestra igual): precio vacío, en
   cero o "-" en una columna de canal → se guarda como "sin precio para
   ese canal", no como error.
 - Filas de encabezado de sección (solo texto en la primera columna, el
   resto vacío) se omiten silenciosamente — no son producto ni error.
+
+## Pantalla de detalle de producto y corrección puntual de precio
+
+`/admin/maestros/productos/[id]` muestra, por producto: precios
+vigentes por canal, costo de referencia (VVF/VVD/costo referencial
+distribuidora), afectación tributaria, y el historial completo de
+versiones de precio (agrupado en "vigentes" vs. "histórico", con el
+origen de cada fila — "Importación" si tiene `price_list_id`,
+"Corrección puntual" si no). También permite editar descripción,
+presentación y flags de lote/vencimiento, y hacer una corrección
+puntual de precio de un canal específico.
+
+La corrección puntual **no** es el flujo normal (que sigue siendo
+reimportar el Excel del proveedor) — la UI lo deja explícito. Técnica
+y semánticamente usa el mismo mecanismo de versionado que el
+importador: inserta una fila nueva en `price_list_items`, el trigger
+cierra la anterior, nunca se sobrescribe ni se borra historial.
 
 ## Snapshot histórico (preparación para Fase 4)
 

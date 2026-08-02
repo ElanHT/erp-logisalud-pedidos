@@ -155,6 +155,70 @@ describe("parsePriceListRows", () => {
     ]);
   });
 
+  it("ignora (no publica como producto) una fila con código pero sin descripción — caso real BSA326", () => {
+    // Excel real de Biosana: código y bonificación presentes, PRODUCTO
+    // vacío (un SKU sin descripción cargada).
+    const rows = buildRows([
+      ["FAR30-026", "BSA326", "BOBSA326", null, null, "", null, null, null, null, null, null, null, null, "-", null, null, null, null],
+    ]);
+
+    const result = parsePriceListRows(rows);
+    expect(result.products).toHaveLength(0);
+    expect(result.errors).toEqual([
+      expect.objectContaining({ code: "MISSING_DESCRIPTION" }),
+    ]);
+  });
+
+  it("ignora una fila de leyenda/nota que cae en la columna de código — caso real Biosana", () => {
+    // Excel real: fila "LEYENDA:" / "VVF= Valor de Venta Farmacia",
+    // esta última justo en la columna de CÓDIGO LOGISALUD. No la
+    // detecta soleNonBlankCellText porque hay dos textos distintos.
+    const rows = buildRows([
+      ["LEYENDA:", "VVF= Valor de Venta Farmacia", null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null],
+    ]);
+
+    const result = parsePriceListRows(rows);
+    expect(result.products).toHaveLength(0);
+    // Cae primero en MISSING_DESCRIPTION (producto vacío); si el
+    // producto tuviera texto entre paréntesis en vez de vacío,
+    // caería en SUSPICIOUS_NOTE (ver siguiente test).
+    expect(result.errors).toEqual([
+      expect.objectContaining({ code: "MISSING_DESCRIPTION" }),
+    ]);
+  });
+
+  it("ignora una fila cuyo código o producto viene envuelto entre paréntesis (nota/aclaración)", () => {
+    const rows = buildRows([
+      [
+        "COD9",
+        "DHP900",
+        null,
+        null,
+        null,
+        "(Ver leyenda de códigos)",
+        null,
+        null,
+        null,
+        10,
+        9,
+        1,
+        null,
+        8,
+        12,
+        11,
+        11,
+        11,
+        13,
+      ],
+    ]);
+
+    const result = parsePriceListRows(rows);
+    expect(result.products).toHaveLength(0);
+    expect(result.errors).toEqual([
+      expect.objectContaining({ code: "SUSPICIOUS_NOTE" }),
+    ]);
+  });
+
   it("marca como error (no como warning) los códigos LOGISALUD duplicados y los excluye de products", () => {
     const dupRow = (producto: string): RawRow => [
       "COD4",

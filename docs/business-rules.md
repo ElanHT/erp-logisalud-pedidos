@@ -114,6 +114,27 @@ decisiones de negocio:
   distinto). Se desactiva el placeholder al hacer la importación real
   para no tener dos "Dapha 10" activos a la vez.
 
+- **2 filas basura se colaron al catálogo real por validación
+  insuficiente** (código presente pero sin descripción de producto) —
+  ambas en el Excel de Biosana: `BSA326` (SKU sin descripción cargada
+  en el Excel del proveedor) y una fila de leyenda ("LEYENDA: VVF=
+  Valor de Venta Farmacia") cuyo texto cayó en la columna de código.
+  Se borraron del catálogo (`products`, `product_tax_profiles` en
+  cascada, `price_list_items` si tenían) y el importador ahora exige
+  descripción de producto real, no solo código — ver data-model.md.
+
+## Pantalla de detalle de producto
+
+- **"Sin precio en ningún canal" es una advertencia visible en la
+  lista general de productos**, no algo que solo se vea al entrar al
+  detalle — para poder detectar huecos de precios de un vistazo sin
+  tener que abrir cada producto.
+- **La corrección puntual de precio es explícitamente para errores
+  puntuales, no el flujo normal.** El flujo normal para actualizar
+  precios sigue siendo reimportar el Excel del proveedor en Listas de
+  precios — la UI lo deja dicho para no generar confusión sobre cuál
+  es el camino correcto.
+
 ## Qué NO cubre esta fase
 
 Explícitamente fuera de alcance por ahora (ver README y CLAUDE.md):
