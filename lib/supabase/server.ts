@@ -1,12 +1,13 @@
 import { createServerClient } from "@supabase/ssr";
 import { cookies } from "next/headers";
+import { cleanEnv } from "@/lib/env";
 
 export function createClient() {
   const cookieStore = cookies();
 
   return createServerClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+    cleanEnv(process.env.NEXT_PUBLIC_SUPABASE_URL),
+    cleanEnv(process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY),
     {
       db: { schema: "pedidos" },
       cookies: {

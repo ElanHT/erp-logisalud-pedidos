@@ -1,12 +1,13 @@
 import { createServerClient } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
+import { cleanEnv } from "@/lib/env";
 
 export async function middleware(request: NextRequest) {
   let response = NextResponse.next({ request });
 
   const supabase = createServerClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+    cleanEnv(process.env.NEXT_PUBLIC_SUPABASE_URL),
+    cleanEnv(process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY),
     {
       db: { schema: "pedidos" },
       cookies: {
