@@ -25,6 +25,19 @@ Seed inicial:
   `BEFORE INSERT` cierra automáticamente la asignación previa al
   insertar una nueva (mismo patrón de versionado que
   `product_tax_profiles`, ver abajo).
+- `sellers`: catálogo real de vendedores del negocio (código de
+  representante, nombre, zona), **deliberadamente desacoplado de
+  `auth.users`** — `user_id` es nullable porque un vendedor puede
+  existir en el catálogo antes de tener cuenta en la app. Se completa
+  en Fase 4 cuando el vendedor se registre.
+  - **Pendiente:** `zone_assignments.vendedor` es `uuid not null
+    references auth.users(id)`, así que no se puede poblar desde
+    `sellers` mientras `user_id` sea `NULL` (que es el caso de todo el
+    seed inicial). Cuando en Fase 4 se complete `sellers.user_id`, un
+    `INSERT ... SELECT zone_id, user_id FROM pedidos.sellers WHERE
+    user_id IS NOT NULL` puebla `zone_assignments` trivialmente. Hasta
+    entonces, la fuente de verdad de "qué zona tiene cada vendedor" es
+    `sellers.zone_id`, no `zone_assignments`.
 - `zone_assignment_participants`: caso **excepcional** de 2+ vendedores
   compartiendo cuota/comisión en una misma zona. Tabla separada, no
   reemplaza a `zone_assignments` — se usa solo cuando existe ese acuerdo
