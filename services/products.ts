@@ -6,8 +6,10 @@ export type ProductWithTaxProfile = {
   id: string;
   codigo_interno: string;
   codigo_proveedor: string | null;
+  codigo_bonificacion: string | null;
   descripcion: string;
   presentacion: string | null;
+  principio_activo: string | null;
   marca: string | null;
   unidad_medida: string;
   estado: string;
@@ -19,7 +21,12 @@ export type ProductWithTaxProfile = {
     tasa_aplicable: number;
     vigente_desde: string;
     vigente_hasta: string | null;
+    vvf_sin_igv?: number | null;
+    vvd_sin_igv?: number | null;
+    costo_referencial_distribuidora?: number | null;
+    fecha_vigencia_proveedor?: string | null;
   }>;
+  hasCurrentPrice: boolean;
 };
 
 export async function listProducts(): Promise<ProductWithTaxProfile[]> {
@@ -27,12 +34,18 @@ export async function listProducts(): Promise<ProductWithTaxProfile[]> {
   const { data, error } = await supabase
     .from("products")
     .select(
-      "*, supplier:suppliers(nombre), product_tax_profiles(afectacion_tributaria, tasa_aplicable, vigente_desde, vigente_hasta)",
+      "*, supplier:suppliers(nombre), product_tax_profiles(afectacion_tributaria, tasa_aplicable, vigente_desde, vigente_hasta), price_list_items(vigente_hasta)",
     )
     .order("descripcion");
 
   if (error) throw new Error(error.message);
-  return data as unknown as ProductWithTaxProfile[];
+
+  return (data as unknown as Array<ProductWithTaxProfile & { price_list_items: Array<{ vigente_hasta: string | null }> }>).map(
+    ({ price_list_items, ...product }) => ({
+      ...product,
+      hasCurrentPrice: price_list_items.some((item) => item.vigente_hasta === null),
+    }),
+  );
 }
 
 export async function listActiveSuppliers() {
@@ -126,6 +139,128 @@ export async function toggleProductEstado(
     entidad: "products",
     entidadId: id,
     datosAntes: before,
+    datosDespues: data,
+  });
+
+  return data;
+}
+
+export type PriceHistoryItem = {
+  id: number;
+  precio: number;
+  vigente_desde: string;
+  vigente_hasta: string | null;
+  price_list_id: string | null;
+  sales_channel: { id: number; nombre: string };
+};
+
+export type ProductDetail = ProductWithTaxProfile & {
+  priceHistory: PriceHistoryItem[];
+};
+
+export async function getProductDetail(id: string): Promise<ProductDetail | null> {
+  const supabase = createClient();
+  const { data, error } = await supabase
+    .from("products")
+    .select(
+      `*, supplier:suppliers(nombre),
+      product_tax_profiles(afectacion_tributaria, tasa_aplicable, vvf_sin_igv, vvd_sin_igv, costo_referencial_distribuidora, fecha_vigencia_proveedor, vigente_desde, vigente_hasta),
+      price_list_items(id, precio, vigente_desde, vigente_hasta, price_list_id, sales_channel:sales_channels(id, nombre))`,
+    )
+    .eq("id", id)
+    .maybeSingle();
+
+  if (error) throw new Error(error.message);
+  if (!data) return null;
+
+  const { price_list_items, ...product } = data as unknown as ProductWithTaxProfile & {
+    price_list_items: PriceHistoryItem[];
+  };
+
+  return {
+    ...product,
+    hasCurrentPrice: price_list_items.some((item) => item.vigente_hasta === null),
+    priceHistory: price_list_items.sort((a, b) => b.vigente_desde.localeCompare(a.vigente_desde)),
+  };
+}
+
+export type ProductDetailUpdate = {
+  descripcion: string;
+  presentacion: string | null;
+  controlaLote: boolean;
+  controlaVencimiento: boolean;
+};
+
+export async function updateProductDetail(
+  id: string,
+  update: ProductDetailUpdate,
+  actor: string,
+) {
+  const supabase = createClient();
+
+  const { data: before } = await supabase.from("products").select("*").eq("id", id).single();
+
+  const { data, error } = await supabase
+    .from("products")
+    .update({
+      descripcion: update.descripcion,
+      presentacion: update.presentacion,
+      controla_lote: update.controlaLote,
+      controla_vencimiento: update.controlaVencimiento,
+    })
+    .eq("id", id)
+    .select()
+    .single();
+
+  if (error) throw new Error(error.message);
+
+  await logAudit({
+    actor,
+    accion: "editar",
+    entidad: "products",
+    entidadId: id,
+    datosAntes: before,
+    datosDespues: data,
+  });
+
+  return data;
+}
+
+/**
+ * Corrección puntual de precio: inserta una price_list_items nueva
+ * (price_list_id null — no viene de una reimportación) para un
+ * producto+canal específico. El trigger de versionado cierra
+ * automáticamente la fila vigente anterior para ese mismo canal —
+ * nunca sobrescribe, igual que hace el importador. Pensado para
+ * corregir un error puntual, no para el flujo normal de actualización
+ * de precios (que es reimportar el Excel del proveedor).
+ */
+export async function correctChannelPrice(
+  productId: string,
+  salesChannelId: number,
+  precio: number,
+  actor: string,
+) {
+  const supabase = createClient();
+
+  const { data, error } = await supabase
+    .from("price_list_items")
+    .insert({
+      product_id: productId,
+      sales_channel_id: salesChannelId,
+      precio,
+      price_list_id: null,
+    })
+    .select("*, sales_channel:sales_channels(nombre)")
+    .single();
+
+  if (error) throw new Error(error.message);
+
+  await logAudit({
+    actor,
+    accion: "corregir_precio_canal",
+    entidad: "price_list_items",
+    entidadId: String(data.id),
     datosDespues: data,
   });
 

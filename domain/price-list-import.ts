@@ -167,6 +167,16 @@ function soleNonBlankCellText(row: RawRow): string | null {
   return distinctValues.size === 1 ? sample : null;
 }
 
+/**
+ * Texto envuelto completamente entre paréntesis (ej. "(Ver leyenda)")
+ * — patrón típico de una aclaración, nunca un código ni nombre de
+ * producto real.
+ */
+function isParentheticalNote(text: string): boolean {
+  const t = text.trim();
+  return t.length > 2 && t.startsWith("(") && t.endsWith(")");
+}
+
 function cellToString(value: CellValue): string {
   return String(value ?? "").trim();
 }
@@ -250,6 +260,32 @@ export function parsePriceListRows(rows: RawRow[]): ParseResult {
       continue;
     }
 
+    // Una fila con código pero sin descripción real no es un producto
+    // (caso real: un SKU discontinuado que quedó en el Excel del
+    // proveedor con el código y nada más — ver docs/data-model.md).
+    const producto = cellToString(row[columnMap.producto]);
+    if (producto === "") {
+      errors.push({
+        rowIndex: r,
+        code: "MISSING_DESCRIPTION",
+        message: `Fila ignorada: código "${codigoLogisalud}" sin descripción de producto.`,
+      });
+      continue;
+    }
+
+    // Notas/leyendas al pie de la tabla (ej. "LEYENDA: VVF= Valor de
+    // Venta Farmacia") a veces caen justo en la columna de código.
+    // Un texto envuelto entre paréntesis en código o descripción es
+    // casi siempre una aclaración, no un producto real.
+    if (isParentheticalNote(codigoLogisalud) || isParentheticalNote(producto)) {
+      errors.push({
+        rowIndex: r,
+        code: "SUSPICIOUS_NOTE",
+        message: `Fila ignorada: parece una nota/leyenda, no un producto ("${codigoLogisalud}" / "${producto}").`,
+      });
+      continue;
+    }
+
     const priceFields: Array<[string, number | null]> = [
       ["PVF INSTITUCIONES", cellToPriceOrNull(row[columnMap.pvfInstituciones])],
       ["PVF SUBDISTRIB.", cellToPriceOrNull(row[columnMap.pvfSubdistrib])],
@@ -272,7 +308,7 @@ export function parsePriceListRows(rows: RawRow[]): ParseResult {
       codigoProveedor: cellToStringOrNull(row[columnMap.codigoProveedor]),
       codigoLogisalud,
       codigoBonificacion: cellToStringOrNull(row[columnMap.codigoBonificacion]),
-      producto: cellToString(row[columnMap.producto]),
+      producto,
       principioActivo: cellToStringOrNull(row[columnMap.principioActivo]),
       presentacion: cellToStringOrNull(row[columnMap.presentacion]),
       unidadMedida: cellToStringOrNull(row[columnMap.unidadMedida]),
