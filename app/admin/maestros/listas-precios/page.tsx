@@ -1,5 +1,6 @@
 import { listActiveSuppliers } from "@/services/products";
 import { listPriceListHistory } from "@/services/price-lists";
+import { Breadcrumb } from "@/components/breadcrumb";
 import { PriceListImporter } from "./price-list-importer";
 
 export default async function ListasPreciosPage() {
@@ -11,6 +12,7 @@ export default async function ListasPreciosPage() {
   return (
     <div className="flex flex-col gap-8">
       <div>
+        <Breadcrumb items={[{ label: "Maestros", href: "/admin" }, { label: "Listas de precios" }]} />
         <h2 className="text-xl font-semibold">Listas de precios</h2>
         <p className="mt-1 text-sm text-gray-600">
           Sube el Excel del proveedor, revisa la vista previa y confirma para publicar.

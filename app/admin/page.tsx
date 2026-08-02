@@ -1,0 +1,57 @@
+import Link from "next/link";
+
+const SECTIONS = [
+  {
+    href: "/admin/maestros/productos",
+    title: "Productos",
+    description: "Catálogo de productos y su perfil tributario.",
+  },
+  {
+    href: "/admin/maestros/listas-precios",
+    title: "Listas de precios",
+    description: "Importar y publicar listas de precios por proveedor.",
+  },
+  {
+    href: "/admin/maestros/proveedores",
+    title: "Proveedores",
+    description: "Diphasac, Biosana, Prades y demás.",
+  },
+  {
+    href: "/admin/maestros/canales",
+    title: "Canales de venta",
+    description: "Mayorista, Horizontal, Minicadenas, Tops, Clínicas, Subdistribuidores.",
+  },
+  {
+    href: "/admin/maestros/zonas",
+    title: "Zonas",
+    description: "Catálogo de zonas de venta.",
+  },
+  {
+    href: "/admin/maestros/condiciones-pago",
+    title: "Condiciones de pago",
+    description: "Catálogo de condiciones de pago.",
+  },
+  {
+    href: "/control-pedidos/validacion-clientes",
+    title: "Validación de clientes",
+    description: "Aprobar o rechazar clientes nuevos solicitados por vendedores.",
+  },
+];
+
+export default function AdminHomePage() {
+  return (
+    <div>
+      <h2 className="text-xl font-semibold">Maestros — Administración</h2>
+      <p className="mt-1 text-sm text-gray-600">Elige una sección para gestionar.</p>
+
+      <div className="mt-6 grid grid-cols-1 gap-4 sm:grid-cols-2">
+        {SECTIONS.map((s) => (
+          <Link key={s.href} href={s.href} className="card p-5 hover:shadow-md">
+            <h3 className="font-semibold text-logisalud-green">{s.title}</h3>
+            <p className="mt-1 text-sm text-gray-600">{s.description}</p>
+          </Link>
+        ))}
+      </div>
+    </div>
+  );
+}
