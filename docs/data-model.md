@@ -166,14 +166,18 @@ Si VVF e IGV vienen vacíos/"-" → `INAFECTO`, tasa 0. Si tienen valor →
 número fijo por fila) — reutiliza el parámetro sembrado en Fase 2, el
 vendedor nunca elige esto.
 
-### Validación: qué bloquea publicar y qué no
+### Validación: qué se omite al publicar y qué no
 
-- **Bloquea** (error): fila sin CÓDIGO LOGISALUD; CÓDIGO LOGISALUD
-  duplicado dentro del mismo archivo (se excluyen ambas filas del
-  duplicado — no se adivina cuál es la correcta).
-- **No bloquea** (advertencia, se muestra igual): precio vacío, en cero
-  o "-" en una columna de canal → se guarda como "sin precio para ese
-  canal", no como error.
+- **Error → se omite esa fila, el resto del archivo se publica
+  igual**: fila sin CÓDIGO LOGISALUD; CÓDIGO LOGISALUD duplicado
+  dentro del mismo archivo (se excluyen ambas filas del duplicado — no
+  se adivina cuál es la correcta). El admin ve estas filas marcadas en
+  el preview antes de confirmar publicar; no hace falta arreglar el
+  Excel para poder cargar el resto de un catálogo válido. Se puede
+  reimportar más adelante (nueva versión) una vez corregidas.
+- **No se omite** (advertencia, se muestra igual): precio vacío, en
+  cero o "-" en una columna de canal → se guarda como "sin precio para
+  ese canal", no como error.
 - Filas de encabezado de sección (solo texto en la primera columna, el
   resto vacío) se omiten silenciosamente — no son producto ni error.
 
@@ -236,10 +240,13 @@ Ver también [business-rules.md](business-rules.md).
    en Fase 4 junto con la app de pedidos — por eso la pantalla de
    validación de `control_pedidos` estará vacía hasta entonces.
 6. **Códigos LOGISALUD duplicados dentro de un mismo archivo se tratan
-   como error bloqueante**, no como advertencia — el PRD pedía
-   "detectar y marcar claramente" sin decir si bloquea; se optó por
-   bloquear ambas filas del duplicado en vez de adivinar cuál vale,
-   para no resolver en silencio una inconsistencia de datos real.
+   como error** (no advertencia) y **se excluyen esas filas de la
+   publicación** — no se adivina cuál de las dos vale, y el resto del
+   archivo se publica igual. Descubierto con datos reales: el Excel de
+   Diphasac traía 3 códigos duplicados (6 filas); bloquear el archivo
+   completo por eso habría dejado afuera ~90 productos válidos sin
+   necesidad. El admin ve las filas marcadas en el preview y decide si
+   corrige el Excel y reimporta después.
 7. **"OBS." y "MASTER PACK"** del Excel de proveedor no se guardan —
    no fueron pedidos explícitamente. Si se necesitan más adelante, es
    una columna nueva en `products`, no un rediseño.

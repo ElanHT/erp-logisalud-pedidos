@@ -104,6 +104,45 @@ describe("parsePriceListRows", () => {
     expect(result.products).toHaveLength(1);
   });
 
+  it("detecta encabezado de sección aunque el texto no caiga en la columna 0 (celdas combinadas)", () => {
+    // Caso real detectado en el archivo de Diphasac: el título de
+    // sección aparece en la columna de CÓDIGO LOGISALUD, no en la 0.
+    const sectionRow: RawRow = new Array(19).fill(null);
+    sectionRow[1] = "LÍNEA MARCAS METABOLICAS Mx";
+
+    const rows = buildRows([
+      sectionRow,
+      [
+        "COD9",
+        "DHP009",
+        null,
+        null,
+        null,
+        "Producto Z",
+        null,
+        null,
+        null,
+        10,
+        9,
+        1,
+        null,
+        8,
+        12,
+        11,
+        11,
+        11,
+        13,
+      ],
+    ]);
+
+    const result = parsePriceListRows(rows);
+    expect(result.sectionHeaders).toEqual([
+      { rowIndex: 7, label: "LÍNEA MARCAS METABOLICAS Mx" },
+    ]);
+    expect(result.products).toHaveLength(1);
+    expect(result.warnings).toHaveLength(0);
+  });
+
   it("marca como error las filas sin CÓDIGO LOGISALUD", () => {
     const rows = buildRows([
       ["COD3", "", null, null, null, "Producto C", null, null, null, 10, 9, 1, null, 8, 12, 11, 11, 11, 13],

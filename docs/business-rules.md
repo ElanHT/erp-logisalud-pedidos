@@ -102,9 +102,11 @@ decisiones de negocio:
   mismo precio.** Confirmado por el negocio, no una suposición — ambos
   canales comparten tarifa en la lista del proveedor.
 
-- **Códigos LOGISALUD duplicados dentro de un archivo bloquean la
-  publicación** de esas filas específicas (no se adivina cuál de las
-  dos versiones es la correcta). Ver supuesto #6 en data-model.md.
+- **Códigos LOGISALUD duplicados dentro de un archivo excluyen esas
+  filas específicas de la publicación** (no se adivina cuál de las dos
+  versiones es la correcta), pero **no bloquean el resto del
+  archivo** — un catálogo de 95 productos con 3 códigos duplicados
+  publica los 92 restantes. Ver supuesto #6 en data-model.md.
 
 - **El producto de ejemplo "Dapha 10" (`DAPHA10-EJ`) sembrado en Fase 2
   queda obsoleto** en cuanto se importa la lista real de Diphasac (que

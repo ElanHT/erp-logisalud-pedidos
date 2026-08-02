@@ -1,64 +1,17 @@
 import "server-only";
-import ExcelJS from "exceljs";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { logAudit } from "./audit-log";
+import { parseWorkbookToRows } from "./price-lists-parser";
 import {
   parsePriceListRows,
   decideTaxTreatment,
   buildChannelPrices,
-  type RawRow,
   type ParsedProductRow,
   type ParseResult,
 } from "@/domain/price-list-import";
 
-const PRICE_SHEET_NAMES = [/PRECIOS X CANALES/i, /FORMATO LGS/i];
 const STORAGE_BUCKET = "price-lists";
-
-function cellPlainValue(value: ExcelJS.CellValue): RawRow[number] {
-  if (value === null || value === undefined) return null;
-  if (value instanceof Date) return value;
-  if (typeof value === "object") {
-    if ("result" in value) return cellPlainValue(value.result as ExcelJS.CellValue);
-    if ("richText" in value) {
-      return (value.richText as Array<{ text: string }>).map((t) => t.text).join("");
-    }
-    if ("text" in value) return String((value as { text: unknown }).text);
-    return null;
-  }
-  if (typeof value === "boolean") return String(value);
-  return value;
-}
-
-function pickWorksheet(workbook: ExcelJS.Workbook): ExcelJS.Worksheet {
-  for (const pattern of PRICE_SHEET_NAMES) {
-    const match = workbook.worksheets.find((ws) => pattern.test(ws.name));
-    if (match) return match;
-  }
-  return workbook.worksheets[0];
-}
-
-function worksheetToRows(worksheet: ExcelJS.Worksheet): RawRow[] {
-  const rows: RawRow[] = Array.from({ length: worksheet.rowCount }, () => []);
-  const maxCol = worksheet.columnCount;
-
-  worksheet.eachRow({ includeEmpty: true }, (row, rowNumber) => {
-    const arr: RawRow = [];
-    for (let c = 1; c <= maxCol; c++) {
-      arr.push(cellPlainValue(row.getCell(c).value));
-    }
-    rows[rowNumber - 1] = arr;
-  });
-
-  return rows;
-}
-
-async function parseWorkbookToRows(buffer: ArrayBuffer): Promise<RawRow[]> {
-  const workbook = new ExcelJS.Workbook();
-  await workbook.xlsx.load(buffer);
-  const worksheet = pickWorksheet(workbook);
-  return worksheetToRows(worksheet);
-}
 
 async function getCurrentIgvRate(): Promise<number> {
   const supabase = createClient();
@@ -127,8 +80,17 @@ export type PublishResult = {
   priceListId: string;
   productCount: number;
   itemCount: number;
+  skippedErrorCount: number;
 };
 
+/**
+ * Las filas con error (código faltante o duplicado) ya vienen
+ * excluidas de `parsed.products` desde el dominio — se omiten de la
+ * publicación, no bloquean el resto del archivo. El admin ya las vio
+ * marcadas en el preview antes de confirmar; bloquear todo el archivo
+ * por unas pocas filas problemáticas frenaría el resto de un catálogo
+ * válido sin necesidad.
+ */
 export async function publishPriceListImport(
   file: File,
   supplierId: number,
@@ -138,11 +100,6 @@ export async function publishPriceListImport(
   const rows = await parseWorkbookToRows(buffer);
   const parsed = parsePriceListRows(rows);
 
-  if (parsed.errors.length > 0) {
-    throw new Error(
-      `No se puede publicar: hay ${parsed.errors.length} fila(s) con error (código faltante o duplicado).`,
-    );
-  }
   if (parsed.products.length === 0) {
     throw new Error("No se encontraron productos válidos para publicar.");
   }
@@ -203,10 +160,16 @@ export async function publishPriceListImport(
       archivo: file.name,
       productos: payload.length,
       items: itemCount,
+      filasOmitidasPorError: parsed.errors.length,
     },
   });
 
-  return { priceListId: priceListId as string, productCount: payload.length, itemCount };
+  return {
+    priceListId: priceListId as string,
+    productCount: payload.length,
+    itemCount,
+    skippedErrorCount: parsed.errors.length,
+  };
 }
 
 export type PriceListHistoryEntry = {

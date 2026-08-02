@@ -32,4 +32,20 @@ describe("applyNewVersion", () => {
     expect(resultado[0].vigenteHasta).toBe("2023-12-31");
     expect(resultado[1].vigenteHasta).toBe("2025-12-31");
   });
+
+  it("cierra el mismo día (no un día antes) cuando la versión activa empezó el mismo día que la nueva", () => {
+    // Bug real detectado al reimportar una lista de precios el mismo
+    // día: "el día antes de la nueva" caía antes del propio inicio de
+    // la versión anterior.
+    const historial = [{ vigenteDesde: "2026-08-02", vigenteHasta: null, valor: "v1" }];
+
+    const resultado = applyNewVersion(historial, {
+      vigenteDesde: "2026-08-02",
+      vigenteHasta: null,
+      valor: "v2",
+    });
+
+    expect(resultado[0].vigenteHasta).toBe("2026-08-02");
+    expect(resultado[0].vigenteHasta >= resultado[0].vigenteDesde).toBe(true);
+  });
 });
