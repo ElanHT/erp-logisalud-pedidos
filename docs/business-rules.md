@@ -79,11 +79,48 @@ sección de snapshot histórico en data-model.md).
   los especificó; se asumió Diphasac y un código placeholder
   (`DAPHA10-EJ`). No usar como dato de producción sin confirmar.
 
+## Importador de listas de precios (sección 8 del PRD)
+
+Ver [data-model.md](data-model.md) para el detalle técnico completo
+(tablas, mapeo de columnas, función de publish). Acá solo las
+decisiones de negocio:
+
+- **"PVF A DISTRIBUIDORA" no es un precio de venta a ningún canal.**
+  Es costo de referencia interno del proveedor hacia LOGISALUD como
+  distribuidora. Guardarlo como `price_list_items` habría sido tratarlo
+  como un precio de venta a cliente, que no es — por eso vive en
+  `product_tax_profiles.costo_referencial_distribuidora`.
+
+- **"FECHA V." se reinterpreta como vigencia del precio en la lista,
+  no vencimiento de lote físico.** Es un supuesto explícito, **a
+  confirmar con el proveedor/comercial**: el nombre de la columna en el
+  Excel es ambiguo, y el vencimiento de lote real es responsabilidad de
+  Operaciones con lotes físicos en Fase 5 — no debe confundirse ni
+  mezclarse con esta fecha del maestro de productos.
+
+- **PVF MAYORISTA/TOP alimenta dos canales (Mayorista y Tops) con el
+  mismo precio.** Confirmado por el negocio, no una suposición — ambos
+  canales comparten tarifa en la lista del proveedor.
+
+- **Códigos LOGISALUD duplicados dentro de un archivo bloquean la
+  publicación** de esas filas específicas (no se adivina cuál de las
+  dos versiones es la correcta). Ver supuesto #6 en data-model.md.
+
+- **El producto de ejemplo "Dapha 10" (`DAPHA10-EJ`) sembrado en Fase 2
+  queda obsoleto** en cuanto se importa la lista real de Diphasac (que
+  trae su propio "Dapha 10" con código real `DHP106`, un producto
+  distinto). Se desactiva el placeholder al hacer la importación real
+  para no tener dos "Dapha 10" activos a la vez.
+
 ## Qué NO cubre esta fase
 
-Explícitamente fuera de alcance en Fase 2 (ver README y CLAUDE.md):
+Explícitamente fuera de alcance por ahora (ver README y CLAUDE.md):
 
-- Pedidos, precios y promociones (Fase 3).
+- Pedidos (siguiente paso después del importador).
+- Promociones, bonificaciones y escalas de precio — se implementan en
+  un paso posterior, cuando exista esa información de Biosana y
+  Prades. `products.codigo_bonificacion` ya se guarda desde ahora para
+  no perder el dato mientras tanto.
 - UI de vendedor (solicitud de cliente/dirección nueva, toma de
   pedido) — la Fase 2 solo deja lista la estructura de datos y RLS;
   la interfaz llega en Fase 4 junto con la app de pedidos.
