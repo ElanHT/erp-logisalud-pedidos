@@ -50,7 +50,11 @@ export function PriceListImporter({
     });
   }
 
-  const canPublish = !!preview && preview.errors.length === 0 && preview.products.length > 0;
+  // Las filas con error ya vienen excluidas de preview.products —
+  // publicar no las incluye, solo se necesita al menos un producto
+  // válido. Los errores se muestran igual para que el admin decida si
+  // corrige el Excel y reimporta después.
+  const canPublish = !!preview && preview.products.length > 0;
 
   return (
     <div className="flex flex-col gap-4">
@@ -90,6 +94,8 @@ export function PriceListImporter({
         <p className="rounded-lg bg-green-50 px-3 py-2 text-sm text-green-800">
           Publicado: {publishResult.productCount} productos, {publishResult.itemCount} precios
           por canal.
+          {publishResult.skippedErrorCount > 0 &&
+            ` ${publishResult.skippedErrorCount} fila(s) con error se omitieron.`}
         </p>
       )}
 
@@ -115,7 +121,7 @@ export function PriceListImporter({
           {preview.errors.length > 0 && (
             <div className="rounded-lg bg-red-50 p-3">
               <p className="text-sm font-semibold text-red-800">
-                Errores — bloquean la publicación
+                Errores — estas filas se omiten al publicar, el resto del archivo continúa
               </p>
               <ul className="mt-1 list-disc pl-5 text-sm text-red-700">
                 {preview.errors.map((e, i) => (

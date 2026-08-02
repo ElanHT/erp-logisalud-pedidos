@@ -143,15 +143,28 @@ export function findHeaderAndColumns(
 
 /**
  * Fila de encabezado de sección (ej. "LÍNEA MARCAS METABOLICAS Mx"):
- * solo tiene texto en una celda temprana y el resto de la fila vacío.
- * No es un producto ni un error — se omite del resultado.
+ * no es un producto ni un error, se omite del resultado.
+ *
+ * No se asume una columna fija — en archivos reales el título puede
+ * caer en cualquier columna. Y como suele ser una celda combinada,
+ * ExcelJS replica el mismo valor en cada celda del rango combinado al
+ * leerlas individualmente; por eso el criterio no es "una sola celda
+ * no vacía" sino "todas las celdas no vacías de la fila tienen
+ * exactamente el mismo texto" (un producto real nunca repite el mismo
+ * valor en código, descripción y precios a la vez).
  */
-function isSectionHeaderRow(row: RawRow): boolean {
-  const nonBlankIndexes = row.reduce<number[]>((acc, cell, i) => {
-    if (!isBlankCell(cell)) acc.push(i);
-    return acc;
-  }, []);
-  return nonBlankIndexes.length === 1 && nonBlankIndexes[0] <= 1;
+function soleNonBlankCellText(row: RawRow): string | null {
+  const distinctValues = new Set<string>();
+  let sample: string | null = null;
+
+  for (const cell of row) {
+    if (isBlankCell(cell)) continue;
+    const text = String(cell).trim();
+    distinctValues.add(text);
+    sample = text;
+  }
+
+  return distinctValues.size === 1 ? sample : null;
 }
 
 function cellToString(value: CellValue): string {
@@ -221,8 +234,9 @@ export function parsePriceListRows(rows: RawRow[]): ParseResult {
     const row = rows[r];
     if (row.every(isBlankCell)) continue; // fila totalmente vacía, se ignora
 
-    if (isSectionHeaderRow(row)) {
-      sectionHeaders.push({ rowIndex: r, label: cellToString(row[0]) });
+    const sectionLabel = soleNonBlankCellText(row);
+    if (sectionLabel !== null) {
+      sectionHeaders.push({ rowIndex: r, label: sectionLabel });
       continue;
     }
 
