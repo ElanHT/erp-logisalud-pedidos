@@ -2,26 +2,35 @@
 @tailwind components;
 @tailwind utilities;
 
-:root {
-  --background: #ffffff;
-  --foreground: #171717;
-}
+@layer base {
+  body {
+    @apply bg-gray-50 text-gray-900 font-body;
+  }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
+  h1,
+  h2,
+  h3,
+  h4,
+  h5,
+  h6 {
+    @apply font-heading;
   }
 }
 
-body {
-  color: var(--foreground);
-  background: var(--background);
-  font-family: Arial, Helvetica, sans-serif;
-}
+@layer components {
+  .card {
+    @apply rounded-xl border border-gray-200 bg-white transition-shadow hover:shadow-sm;
+  }
 
-@layer utilities {
-  .text-balance {
-    text-wrap: balance;
+  .card-highlight {
+    @apply rounded-xl border-2 border-logisalud-green bg-white transition-shadow hover:shadow-md;
+  }
+
+  .btn-primary {
+    @apply inline-flex min-h-12 items-center justify-center rounded-xl bg-logisalud-green px-6 py-3 text-base font-semibold text-white transition-colors hover:bg-logisalud-green/90 active:bg-logisalud-green/80;
+  }
+
+  .btn-secondary {
+    @apply inline-flex min-h-12 items-center justify-center rounded-xl border-2 border-logisalud-teal px-6 py-3 text-base font-semibold text-logisalud-teal transition-colors hover:bg-logisalud-teal/10;
   }
 }

@@ -1,36 +1,76 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# erp-logisalud-pedidos
 
-## Getting Started
+Módulo de toma, validación, despacho y documentación electrónica de
+pedidos de LOGISALUD (distribuidora farmacéutica). Repo independiente
+de `erp-logisalud` (ERP de Cuentas por Cobrar), pero de la misma
+familia visual de marca.
 
-First, run the development server:
+> **Fase 1 (base técnica).** Este README describe únicamente la base
+> técnica: auth, RLS, estructura de carpetas y CI. No hay pantallas de
+> negocio, motor de precios, stock ni NubeFact todavía — ver
+> [docs/business-rules.md](docs/business-rules.md).
+
+## Stack
+
+Next.js 14 (App Router) · TypeScript · Tailwind CSS 3 · Supabase
+(Postgres + Auth + RLS) · Vercel
+
+## Requisitos previos
+
+- Node.js 18.18+ (usado en desarrollo: ver `.nvmrc` si existe, o Node
+  LTS actual)
+- Una cuenta y proyecto en [Supabase](https://supabase.com) — este
+  módulo usa el schema Postgres `pedidos` dentro de un proyecto que
+  puede ser compartido con otros sistemas (ver
+  [docs/architecture.md](docs/architecture.md))
+
+## Setup local
+
+```bash
+npm install
+cp .env.example .env.local
+```
+
+Completar en `.env.local` las variables de tu proyecto Supabase (URL,
+anon key, service role key). Nunca commitear `.env.local` — ver
+[docs/security.md](docs/security.md).
+
+Aplicar las migraciones en `supabase/migrations/` contra tu proyecto
+Supabase (vía Supabase CLI `supabase db push`, o pegando el SQL en el
+SQL Editor del dashboard, en orden de numeración).
 
 ```bash
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Abrir [http://localhost:3000](http://localhost:3000).
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## Scripts
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+```bash
+npm run dev     # servidor de desarrollo
+npm run build   # build de producción
+npm run start   # servir el build de producción
+npm run lint     # eslint
+```
 
-## Learn More
+## Estructura de carpetas
 
-To learn more about Next.js, take a look at the following resources:
+Ver [docs/architecture.md](docs/architecture.md) para el detalle y el
+razonamiento detrás de cada carpeta.
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+```
+app/  components/  features/  lib/  services/  domain/
+supabase/migrations/  tests/  docs/
+```
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+## Documentación
 
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+- [docs/architecture.md](docs/architecture.md) — decisiones técnicas:
+  schema Postgres dedicado, modelo de roles/RLS, mecanismo de auditoría.
+- [docs/security.md](docs/security.md) — manejo de credenciales y de la
+  service role key.
+- [docs/business-rules.md](docs/business-rules.md) — roles del módulo y
+  supuestos de negocio pendientes de validar.
+- [CLAUDE.md](CLAUDE.md) — guía para trabajar en este repo con Claude
+  Code.
