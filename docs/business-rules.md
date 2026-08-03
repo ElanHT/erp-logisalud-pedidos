@@ -170,6 +170,26 @@ Máquina de estados completa, diagrama y tabla de transiciones en
   vendedor harían falta cuentas que SOLO tuvieran el rol `vendedor` —
   no se construyó ninguna feature de "suplantar rol" porque no fue
   pedida.
+- **"Cliente nuevo" desde el pedido, agregado tras un bug reportado.**
+  La primera versión de Fase 4 dejó la máquina de estados
+  `NEW_CUSTOMER_VALIDATION` y las policies de RLS listas para un
+  cliente en `PENDIENTE_DE_VALIDACION`, pero **no construyó ninguna
+  pantalla/acción que realmente creara ese cliente** — el selector de
+  "Nuevo pedido" solo permitía elegir clientes ya `ACTIVO`. Se agregó
+  `services/customers.ts::requestNewCustomer()` + un mini-formulario
+  "+ Cliente nuevo" en `new-order-form.tsx` que fuerza
+  `estado = 'PENDIENTE_DE_VALIDACION'` sin importar el rol de quien lo
+  crea (un admin podría insertar con cualquier estado según su propia
+  policy de RLS, pero es una *solicitud*, no un alta directa). **Límite
+  conocido, no nuevo de este fix:** la policy `customer_addresses_
+  insert_vendedor` exige que la zona del cliente esté en
+  `current_user_zone_ids()` del vendedor — como `zone_assignments`
+  sigue sin poblarse (ver más arriba), un usuario con *solo* el rol
+  `vendedor` (sin `administrador`) fallaría al crear la dirección del
+  cliente nuevo. Hoy no es un problema práctico porque los únicos
+  usuarios reales son administradores (que sí pueden vía
+  `customer_addresses_write_control_o_admin`), pero queda anotado para
+  cuando se registren vendedores reales.
 - **Trigger de `ADMINISTRATIVE_EXCEPTION` (confirmado con el usuario,
   no es un supuesto abierto): la condición de pago elegida en el pedido
   es distinta de `customers.condicion_pago_habitual_id`.** No hay PRD

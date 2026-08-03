@@ -41,6 +41,63 @@ export async function listActiveCustomers(): Promise<ActiveCustomerOption[]> {
   return data as unknown as ActiveCustomerOption[];
 }
 
+/**
+ * Solicitud de cliente nuevo (Fase 2, "Flujo de cliente nuevo") desde el
+ * flujo de toma de pedido (Fase 4): siempre queda en
+ * PENDIENTE_DE_VALIDACION, sin importar el rol de quien la crea — un
+ * admin puede insertar con cualquier estado según su policy de RLS,
+ * pero acá se fuerza igual porque es una SOLICITUD, no un alta directa.
+ * El pedido que la use queda en NEW_CUSTOMER_VALIDATION al enviarse
+ * (ver domain/orders.ts) hasta que control_pedidos/admin la apruebe.
+ */
+export async function requestNewCustomer(input: {
+  rucODocumento: string;
+  razonSocial: string;
+  canalId: number;
+  zonaId: number;
+  condicionPagoHabitualId: number;
+  direccion: string;
+  solicitadoPor: string;
+}): Promise<{ customer: ActiveCustomerOption; addressId: string }> {
+  const supabase = createClient();
+
+  const { data: customer, error: customerError } = await supabase
+    .from("customers")
+    .insert({
+      ruc_o_documento: input.rucODocumento,
+      razon_social: input.razonSocial,
+      canal_id: input.canalId,
+      zona_id: input.zonaId,
+      condicion_pago_habitual_id: input.condicionPagoHabitualId,
+      estado: "PENDIENTE_DE_VALIDACION",
+      solicitado_por: input.solicitadoPor,
+    })
+    .select("id, razon_social, ruc_o_documento, canal_id, condicion_pago_habitual_id")
+    .single();
+
+  if (customerError) {
+    if (customerError.code === "23505") {
+      throw new Error("Ya existe un cliente con ese RUC/documento.");
+    }
+    throw new Error(customerError.message);
+  }
+
+  const { data: address, error: addressError } = await supabase
+    .from("customer_addresses")
+    .insert({
+      customer_id: customer.id,
+      direccion: input.direccion,
+      es_principal: true,
+      solicitado_por: input.solicitadoPor,
+    })
+    .select("id")
+    .single();
+
+  if (addressError) throw new Error(addressError.message);
+
+  return { customer: customer as unknown as ActiveCustomerOption, addressId: address.id };
+}
+
 export async function listCustomerAddresses(customerId: string) {
   const supabase = createClient();
   const { data, error } = await supabase
