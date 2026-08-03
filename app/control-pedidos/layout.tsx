@@ -1,6 +1,6 @@
 import Link from "next/link";
-import { requireRole } from "@/lib/auth/session";
-import { signOut } from "@/lib/auth/actions";
+import { requireRole, roleLabel } from "@/lib/auth/session";
+import { UserMenu } from "@/components/user-menu";
 
 export default async function ControlPedidosLayout({
   children,
@@ -22,11 +22,12 @@ export default async function ControlPedidosLayout({
               </Link>
             )}
           </div>
-          <form action={signOut}>
-            <button type="submit" className="btn-secondary text-sm">
-              Cerrar sesión
-            </button>
-          </form>
+          <UserMenu
+            fullName={user.fullName}
+            email={user.email}
+            roleLabel={user.roles[0] ? roleLabel(user.roles[0]) : null}
+            perfilHref={isAdmin ? "/admin/perfil" : undefined}
+          />
         </div>
       </header>
       <div className="mx-auto max-w-3xl p-6">{children}</div>

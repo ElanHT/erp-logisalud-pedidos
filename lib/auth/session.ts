@@ -5,12 +5,25 @@ import { createClient } from "@/lib/supabase/server";
 export type CurrentUser = {
   userId: string;
   email: string | null;
+  fullName: string | null;
   roles: string[];
 };
 
 type UserRoleRow = {
   roles: { name: string } | { name: string }[] | null;
 };
+
+const ROLE_LABELS: Record<string, string> = {
+  vendedor: "Vendedor",
+  control_pedidos: "Control de pedidos",
+  aprobador_comercial: "Aprobador comercial",
+  operaciones: "Operaciones",
+  administrador: "Administrador",
+};
+
+export function roleLabel(role: string): string {
+  return ROLE_LABELS[role] ?? role;
+}
 
 export async function getCurrentUser(): Promise<CurrentUser | null> {
   const supabase = createClient();
@@ -20,20 +33,25 @@ export async function getCurrentUser(): Promise<CurrentUser | null> {
 
   if (!user) return null;
 
-  const { data, error } = await supabase
-    .from("user_roles")
-    .select("roles(name)")
-    .eq("user_id", user.id);
+  const [{ data: roleRows, error: roleError }, { data: profile }] = await Promise.all([
+    supabase.from("user_roles").select("roles(name)").eq("user_id", user.id),
+    supabase.from("profiles").select("full_name").eq("id", user.id).maybeSingle(),
+  ]);
 
-  if (error) throw new Error(error.message);
+  if (roleError) throw new Error(roleError.message);
 
-  const roles = ((data ?? []) as UserRoleRow[]).flatMap((row) => {
+  const roles = ((roleRows ?? []) as UserRoleRow[]).flatMap((row) => {
     const r = row.roles;
     if (!r) return [];
     return Array.isArray(r) ? r.map((x) => x.name) : [r.name];
   });
 
-  return { userId: user.id, email: user.email ?? null, roles };
+  return {
+    userId: user.id,
+    email: user.email ?? null,
+    fullName: profile?.full_name ?? null,
+    roles,
+  };
 }
 
 /**
