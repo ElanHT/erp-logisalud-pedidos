@@ -112,7 +112,8 @@ export async function getOrderDetail(orderId: string): Promise<OrderDetail | nul
   const { data: order, error: orderError } = await supabase
     .from("orders")
     .select(
-      `${ORDER_SUMMARY_SELECT}, seller_id, customer_id, customer_address_id, payment_terms_id,
+      `id, estado, fecha_creacion, fecha_envio, seller_id, customer_id, customer_address_id, payment_terms_id,
+      seller:sellers(nombre_completo),
       customer:customers(razon_social, canal_id, condicion_pago_habitual_id),
       address:customer_addresses(direccion),
       payment_terms:payment_terms(nombre)`,
