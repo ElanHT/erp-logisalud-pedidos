@@ -15,6 +15,45 @@ export type PendingCustomer = {
   customer_addresses: Array<{ direccion: string; ubigeo: string | null; es_principal: boolean }>;
 };
 
+export type ActiveCustomerOption = {
+  id: string;
+  razon_social: string;
+  ruc_o_documento: string;
+  canal_id: number | null;
+  condicion_pago_habitual_id: number | null;
+};
+
+/**
+ * Clientes ACTIVO visibles para el usuario actual (RLS ya limita por
+ * zona si es vendedor, o muestra todos si es admin/control_pedidos —
+ * ver customers_select en 0012_customers.sql). Usado por el selector de
+ * cliente al tomar un pedido.
+ */
+export async function listActiveCustomers(): Promise<ActiveCustomerOption[]> {
+  const supabase = createClient();
+  const { data, error } = await supabase
+    .from("customers")
+    .select("id, razon_social, ruc_o_documento, canal_id, condicion_pago_habitual_id")
+    .eq("estado", "ACTIVO")
+    .order("razon_social");
+
+  if (error) throw new Error(error.message);
+  return data as unknown as ActiveCustomerOption[];
+}
+
+export async function listCustomerAddresses(customerId: string) {
+  const supabase = createClient();
+  const { data, error } = await supabase
+    .from("customer_addresses")
+    .select("id, direccion, es_principal")
+    .eq("customer_id", customerId)
+    .eq("estado", "activo")
+    .order("es_principal", { ascending: false });
+
+  if (error) throw new Error(error.message);
+  return data;
+}
+
 export async function listPendingCustomers(): Promise<PendingCustomer[]> {
   const supabase = createClient();
   const { data, error } = await supabase
@@ -54,5 +93,36 @@ export async function resolveCustomerValidation(
     .single();
 
   if (error) throw new Error(error.message);
+
+  // Fase 4: todo pedido que quedó esperando a este cliente
+  // (NEW_CUSTOMER_VALIDATION) se destraba con la misma decisión — si el
+  // cliente quedó ACTIVO, se reevalúa la bifurcación (puede seguir a
+  // READY_FOR_OPERATIONS o caer en otra excepción); si fue RECHAZADO, el
+  // pedido vuelve a DRAFT (un cliente rechazado no puede seguir
+  // avanzando solo).
+  const { data: pendingOrders, error: pendingError } = await supabase
+    .from("orders")
+    .select("id")
+    .eq("customer_id", customerId)
+    .eq("estado", "NEW_CUSTOMER_VALIDATION");
+  if (pendingError) throw new Error(pendingError.message);
+
+  for (const order of pendingOrders ?? []) {
+    if (decision === "ACTIVO") {
+      const { error: rpcError } = await supabase.rpc("reevaluate_order", {
+        p_order_id: order.id,
+        p_motivo: "Cliente validado",
+      });
+      if (rpcError) throw new Error(rpcError.message);
+    } else {
+      const { error: rpcError } = await supabase.rpc("apply_order_transition", {
+        p_order_id: order.id,
+        p_estado_nuevo: "DRAFT",
+        p_motivo: "Cliente rechazado",
+      });
+      if (rpcError) throw new Error(rpcError.message);
+    }
+  }
+
   return data;
 }
