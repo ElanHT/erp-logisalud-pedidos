@@ -1,72 +1,104 @@
 import Link from "next/link";
-import { getCurrentUser } from "@/lib/auth/session";
-import { signOut } from "@/lib/auth/actions";
+import { getCurrentUser, roleLabel } from "@/lib/auth/session";
+import { listPendingCustomers } from "@/services/customers";
+import { UserMenu } from "@/components/user-menu";
+
+type HomeSection = {
+  href: string;
+  title: string;
+  description: string;
+  roles: string[];
+};
+
+const HOME_SECTIONS: HomeSection[] = [
+  {
+    href: "/admin",
+    title: "Maestros",
+    description: "Productos, proveedores, canales, zonas y condiciones de pago.",
+    roles: ["administrador"],
+  },
+  {
+    href: "/admin/maestros/productos",
+    title: "Productos",
+    description: "Catálogo de productos, precios por canal y perfil tributario.",
+    roles: ["administrador"],
+  },
+  {
+    href: "/admin/maestros/listas-precios",
+    title: "Listas de precios",
+    description: "Importar y publicar listas de precios por proveedor.",
+    roles: ["administrador"],
+  },
+  {
+    href: "/control-pedidos/validacion-clientes",
+    title: "Validación de clientes",
+    description: "Aprobar o rechazar clientes nuevos solicitados por vendedores.",
+    roles: ["administrador", "control_pedidos"],
+  },
+];
 
 export default async function Home() {
   const user = await getCurrentUser();
+  const isAdmin = user?.roles.includes("administrador") ?? false;
+
+  const sections = user
+    ? HOME_SECTIONS.filter((s) => s.roles.some((r) => user.roles.includes(r)))
+    : [];
+
+  const canSeePendingCustomers = sections.some((s) => s.href === "/control-pedidos/validacion-clientes");
+  const pendingCount = canSeePendingCustomers ? (await listPendingCustomers()).length : null;
 
   return (
-    <main className="mx-auto flex min-h-screen max-w-md flex-col gap-6 p-6">
-      <header className="pt-8">
-        <h1 className="text-3xl font-bold text-logisalud-green">
-          LOGISALUD Pedidos
-        </h1>
-        <p className="mt-1 text-sm text-gray-600">
-          Fase 2 — Maestros. Aún sin pedidos, precios ni stock.
-        </p>
+    <main className="mx-auto flex min-h-screen max-w-4xl flex-col gap-8 p-6">
+      <header className="flex flex-wrap items-center justify-between gap-3 pt-8">
+        <h1 className="text-3xl font-bold text-logisalud-green">LOGISALUD Pedidos</h1>
+        {user && (
+          <UserMenu
+            fullName={user.fullName}
+            email={user.email}
+            roleLabel={user.roles[0] ? roleLabel(user.roles[0]) : null}
+            perfilHref={isAdmin ? "/admin/perfil" : undefined}
+          />
+        )}
       </header>
 
-      <section className="card p-5">
-        <h2 className="text-lg font-semibold">Estado del proyecto</h2>
-        <p className="mt-2 text-sm text-gray-600">
-          Auth, roles, RLS y maestros (clientes, zonas, productos, canales,
-          proveedores, condiciones de pago) configurados. Ver{" "}
-          <code className="rounded bg-gray-100 px-1 py-0.5">
-            docs/data-model.md
-          </code>{" "}
-          para el detalle.
-        </p>
-      </section>
-
-      <section className="card-highlight p-5">
-        <h2 className="text-lg font-semibold text-logisalud-teal">
-          Próximos pasos
-        </h2>
-        <p className="mt-2 text-sm text-gray-600">
-          Pedidos, precios, promociones, stock y NubeFact llegan en fases
-          posteriores.
-        </p>
-      </section>
-
       {user ? (
-        <section className="card flex flex-col gap-3 p-5">
-          <p className="text-sm text-gray-600">
-            Sesión iniciada como <span className="font-semibold">{user.email}</span>
-            {user.roles.length > 0 && ` (${user.roles.join(", ")})`}
+        <>
+          <p className="-mt-4 text-sm text-gray-600">
+            Hola, {user.fullName ?? user.email} — elige una sección para empezar.
           </p>
-          <div className="flex flex-wrap gap-3">
-            {user.roles.includes("administrador") && (
-              <Link href="/admin/maestros/proveedores" className="btn-primary">
-                Ir a Maestros
-              </Link>
-            )}
-            {(user.roles.includes("control_pedidos") ||
-              user.roles.includes("administrador")) && (
-              <Link href="/control-pedidos/validacion-clientes" className="btn-secondary">
-                Validación de clientes
-              </Link>
-            )}
-          </div>
-          <form action={signOut}>
-            <button type="submit" className="text-sm text-gray-500 underline">
-              Cerrar sesión
-            </button>
-          </form>
-        </section>
+
+          {pendingCount !== null && (
+            <Link href="/control-pedidos/validacion-clientes" className="card-highlight flex items-baseline gap-3 p-5">
+              <span className="text-3xl font-bold text-logisalud-green">{pendingCount}</span>
+              <span className="text-sm text-gray-600">
+                {pendingCount === 1 ? "cliente pendiente de validación" : "clientes pendientes de validación"}
+              </span>
+            </Link>
+          )}
+
+          {sections.length > 0 ? (
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+              {sections.map((s) => (
+                <Link key={s.href} href={s.href} className="card p-5 hover:shadow-md">
+                  <h3 className="font-semibold text-logisalud-green">{s.title}</h3>
+                  <p className="mt-1 text-sm text-gray-600">{s.description}</p>
+                </Link>
+              ))}
+            </div>
+          ) : (
+            <p className="text-sm text-gray-600">
+              Todavía no tienes secciones asignadas. Contacta a un administrador.
+            </p>
+          )}
+        </>
       ) : (
-        <Link href="/login" className="btn-primary text-center">
-          Iniciar sesión
-        </Link>
+        <>
+          <p className="-mt-4 text-sm text-gray-600">Gestión de pedidos, precios y clientes.</p>
+          <Link href="/login" className="btn-primary text-center">
+            Iniciar sesión
+          </Link>
+        </>
       )}
     </main>
   );

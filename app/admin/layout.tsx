@@ -1,6 +1,6 @@
 import Link from "next/link";
-import { requireRole } from "@/lib/auth/session";
-import { signOut } from "@/lib/auth/actions";
+import { requireRole, roleLabel } from "@/lib/auth/session";
+import { UserMenu } from "@/components/user-menu";
 
 const NAV_LINKS = [
   { href: "/admin", label: "Maestros" },
@@ -28,16 +28,12 @@ export default async function AdminLayout({ children }: { children: React.ReactN
               ))}
             </nav>
           </div>
-          <div className="flex items-center gap-3 text-sm">
-            <Link href="/admin/perfil" className="text-gray-600 hover:text-logisalud-green hover:underline">
-              {user.email}
-            </Link>
-            <form action={signOut}>
-              <button type="submit" className="btn-secondary text-sm">
-                Cerrar sesión
-              </button>
-            </form>
-          </div>
+          <UserMenu
+            fullName={user.fullName}
+            email={user.email}
+            roleLabel={user.roles[0] ? roleLabel(user.roles[0]) : null}
+            perfilHref="/admin/perfil"
+          />
         </div>
       </header>
       <div className="mx-auto max-w-4xl p-6">{children}</div>
