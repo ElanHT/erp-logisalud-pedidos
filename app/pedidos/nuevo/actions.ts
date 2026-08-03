@@ -4,10 +4,44 @@ import { redirect } from "next/navigation";
 import { getCurrentUser, requireUserId } from "@/lib/auth/session";
 import { resolveOrderSellerId } from "@/domain/orders";
 import { createDraftOrder } from "@/services/orders";
-import { listCustomerAddresses } from "@/services/customers";
+import { listCustomerAddresses, requestNewCustomer } from "@/services/customers";
 
 export async function getAddressesForCustomer(customerId: string) {
   return listCustomerAddresses(customerId);
+}
+
+export async function crearClienteNuevo(input: {
+  razonSocial: string;
+  rucODocumento: string;
+  canalId: number;
+  zonaId: number;
+  condicionPagoHabitualId: number;
+  direccion: string;
+}) {
+  const userId = await requireUserId();
+
+  const razonSocial = input.razonSocial.trim();
+  const rucODocumento = input.rucODocumento.trim();
+  const direccion = input.direccion.trim();
+
+  if (!razonSocial) throw new Error("La razón social es requerida.");
+  if (!rucODocumento) throw new Error("El RUC/documento es requerido.");
+  if (!input.canalId) throw new Error("Selecciona un canal.");
+  if (!input.zonaId) throw new Error("Selecciona una zona.");
+  if (!input.condicionPagoHabitualId) throw new Error("Selecciona una condición de pago habitual.");
+  if (!direccion) throw new Error("La dirección es requerida.");
+
+  const { customer, addressId } = await requestNewCustomer({
+    rucODocumento,
+    razonSocial,
+    canalId: input.canalId,
+    zonaId: input.zonaId,
+    condicionPagoHabitualId: input.condicionPagoHabitualId,
+    direccion,
+    solicitadoPor: userId,
+  });
+
+  return { customer, addressId };
 }
 
 export async function crearBorrador(formData: FormData) {

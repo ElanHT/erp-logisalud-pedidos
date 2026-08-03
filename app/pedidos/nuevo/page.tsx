@@ -8,9 +8,11 @@ export default async function NuevoPedidoPage() {
   const user = await getCurrentUser();
   const isAdmin = user?.roles.includes("administrador") ?? false;
 
-  const [customers, paymentTerms, sellers] = await Promise.all([
+  const [customers, paymentTerms, salesChannels, zones, sellers] = await Promise.all([
     listActiveCustomers(),
     listCatalog("payment_terms"),
+    listCatalog("sales_channels"),
+    listCatalog("zones"),
     isAdmin ? listActiveSellers() : Promise.resolve([]),
   ]);
 
@@ -28,6 +30,8 @@ export default async function NuevoPedidoPage() {
           sellers={sellers}
           customers={customers}
           paymentTerms={paymentTerms.map((p) => ({ id: p.id, nombre: p.nombre }))}
+          salesChannels={salesChannels.map((c) => ({ id: c.id, nombre: c.nombre }))}
+          zones={zones.map((z) => ({ id: z.id, nombre: z.nombre }))}
         />
       </div>
     </div>
