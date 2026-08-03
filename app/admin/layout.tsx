@@ -7,6 +7,7 @@ const NAV_LINKS = [
   { href: "/admin/maestros/productos", label: "Productos" },
   { href: "/admin/maestros/listas-precios", label: "Listas de precios" },
   { href: "/control-pedidos/validacion-clientes", label: "Validación de clientes" },
+  { href: "/pedidos", label: "Pedidos" },
 ];
 
 export default async function AdminLayout({ children }: { children: React.ReactNode }) {

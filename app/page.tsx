@@ -12,6 +12,12 @@ type HomeSection = {
 
 const HOME_SECTIONS: HomeSection[] = [
   {
+    href: "/pedidos",
+    title: "Pedidos",
+    description: "Tomar un pedido nuevo o revisar tus borradores.",
+    roles: ["administrador", "vendedor"],
+  },
+  {
     href: "/admin",
     title: "Maestros",
     description: "Productos, proveedores, canales, zonas y condiciones de pago.",
