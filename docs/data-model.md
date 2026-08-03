@@ -217,16 +217,57 @@ y semánticamente usa el mismo mecanismo de versionado que el
 importador: inserta una fila nueva en `price_list_items`, el trigger
 cierra la anterior, nunca se sobrescribe ni se borra historial.
 
-## Snapshot histórico (preparación para Fase 4)
+## Snapshot histórico
 
-Cuando existan `orders`/`order_items` (Fase 4), deben **copiar**, no
-referenciar en vivo, los datos de cliente/producto/precio vigentes al
-momento del pedido (razón social, dirección, tratamiento tributario,
-precio, etc.). Esto es intencional: un cambio posterior en estos
-maestros (p.ej. el cliente cambia de zona, o un producto pasa de
-`INAFECTO` a `GRAVADO`) **no debe alterar pedidos ya creados**. Los
-maestros de esta fase son la fuente de verdad para pedidos *nuevos*;
-los pedidos existentes llevan su propia copia congelada de esos datos.
+`orders` guarda `razon_social_snapshot`/`direccion_snapshot`/
+`ubigeo_snapshot`/`canal_snapshot`/`zona_snapshot`/`vendedor_snapshot`,
+copiados (no referenciados en vivo) en el momento exacto del envío
+(`pedidos.submit_order()`, 0036). `order_items` copia
+`precio_unitario`/`afectacion_tributaria`/`tasa_igv` de la misma forma.
+Esto es intencional: un cambio posterior en customers/products/
+product_tax_profiles/sellers/zones (p.ej. el cliente cambia de zona, o
+un producto pasa de `INAFECTO` a `GRAVADO`) **no altera pedidos ya
+enviados**. Los maestros son la fuente de verdad para pedidos *nuevos*
+o para pedidos que siguen en `DRAFT`; un pedido `SUBMITTED` en adelante
+lleva su propia copia congelada.
+
+## Fase 4 — Pedidos
+
+Ver [workflows.md](workflows.md) para el diagrama de estados completo
+y [business-rules.md](business-rules.md) para las decisiones de
+negocio (trigger de `ADMINISTRATIVE_EXCEPTION`, seller "sin vendedor",
+sellers de prueba). Resumen técnico:
+
+- **`orders`/`order_items`** (0033): `orders.estado` nunca se edita con
+  un `UPDATE` directo — la policy `orders_update_draft` solo permite
+  escribir mientras el pedido sigue en `DRAFT` (su propio `WITH CHECK`
+  exige que la fila nueva también quede en `DRAFT`, así que ningún
+  cliente puede sacar un pedido de `DRAFT` por su cuenta). La única
+  forma de avanzar de estado es `pedidos.apply_order_transition()`
+  (0036), `SECURITY DEFINER` con su propia verificación de rol/
+  pertenencia — necesaria porque escribe a través de una frontera que
+  el RLS de cliente no puede cruzar.
+- **`order_status_history`/`order_observations`** (0034): historial de
+  transiciones y comentarios libres. Sin policy de `INSERT` para
+  `authenticated` en `order_status_history` — solo escribe
+  `apply_order_transition()`.
+- **`approval_requests`/`approval_decisions`** (0035): solicitudes de
+  descuento y sus decisiones (aprobar/rechazar/aprobar otro precio/
+  solicitar info). El estado de una solicitud (`PENDIENTE`→`RESUELTO`)
+  solo lo cambia `pedidos.decide_approval_request()` (0036).
+- **`pedidos.current_seller_id()`** (0032): resuelve el `seller_id` del
+  usuario autenticado (`sellers.user_id = auth.uid()`). Particiona
+  `orders`/`order_items` por vendedor **directo**, no por zona —
+  `zone_assignments` (base del RLS de `customers`) sigue sin
+  sincronizarse con `sellers.user_id` (ver "Pendiente" en la sección de
+  zonas), así que depender de esa tabla para pedidos habría heredado el
+  mismo desfase.
+- **Recalculado de precios server-side, sin excepciones.**
+  `pedidos.submit_order()` no acepta ningún precio como parámetro: los
+  busca ella misma en `price_list_items`/`product_tax_profiles`
+  vigentes, en el momento exacto de `DRAFT → SUBMITTED`, y nunca vuelve
+  a tocarlos después (la reevaluación tras una excepción resuelta usa
+  `pedidos.reevaluate_order()`, que solo re-decide la bifurcación).
 
 ## Auditoría
 
@@ -237,7 +278,9 @@ depende de que el código de aplicación recuerde llamar a `logAudit()`.
 El resto de maestros (canales, proveedores, zonas, condiciones de pago,
 `products`) se audita desde la capa de servicio
 (`services/catalog.ts`, `services/products.ts`) siguiendo el patrón por
-defecto descrito en [architecture.md](architecture.md).
+defecto descrito en [architecture.md](architecture.md). Pedidos (Fase
+4) sigue el mismo patrón explícito de servicio — ver business-rules.md
+para por qué no se usó un trigger genérico ahí.
 
 ## RLS — resumen por rol
 
@@ -247,6 +290,8 @@ defecto descrito en [architecture.md](architecture.md).
 | zone_assignments, zone_assignment_participants | lectura de las propias | lectura de todas | lectura de todas | lectura + escritura |
 | customers, customer_addresses, customer_contacts | lectura scoped a zona; insert solo `PENDIENTE_DE_VALIDACION` | lectura + escritura (aprueba/rechaza) | lectura | lectura + escritura |
 | price_lists, price_list_items | lectura | lectura | lectura | lectura + escritura (única forma de publicar) |
+| orders, order_items, order_status_history, order_observations | lectura/escritura scoped a `seller_id` propio, solo en `DRAFT` | lectura de todas; decide `ADMINISTRATIVE_EXCEPTION` | aprobador_comercial: lectura de todas, decide `COMMERCIAL_EXCEPTION`; operaciones: lectura solo de `READY_FOR_OPERATIONS` | lectura + escritura de todas, cualquier transición |
+| approval_requests, approval_decisions | crea/lee las de sus propios pedidos | — | aprobador_comercial: lectura + decide todas | lectura + escritura de todas |
 
 ## Supuestos tomados por falta de dato exacto en el PRD
 
@@ -270,11 +315,10 @@ Ver también [business-rules.md](business-rules.md).
    modelo y RLS completos, pero la asignación se gestiona por ahora vía
    SQL/dashboard de Supabase hasta que se priorice una pantalla
    dedicada.
-5. **Vendedor: sin pantalla propia todavía.** Las capacidades de
-   `vendedor` (insertar solicitud de cliente/dirección nueva) están
-   implementadas a nivel de RLS, pero la UI para vendedor se construye
-   en Fase 4 junto con la app de pedidos — por eso la pantalla de
-   validación de `control_pedidos` estará vacía hasta entonces.
+5. **Vendedor: pantalla de toma de pedido construida en Fase 4**
+   (`/pedidos/*`). La solicitud de cliente/dirección nueva sigue sin
+   pantalla propia de vendedor — solo existe a nivel de RLS, pendiente
+   para una fase posterior.
 6. **Códigos LOGISALUD duplicados dentro de un mismo archivo se tratan
    como error** (no advertencia) y **se excluyen esas filas de la
    publicación** — no se adivina cuál de las dos vale, y el resto del

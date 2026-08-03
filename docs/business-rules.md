@@ -135,18 +135,86 @@ decisiones de negocio:
   precios — la UI lo deja dicho para no generar confusión sobre cuál
   es el camino correcto.
 
+## Fase 4 — Pedidos
+
+Máquina de estados completa, diagrama y tabla de transiciones en
+[workflows.md](workflows.md). Acá solo las decisiones de negocio.
+
+- **Acceso de administrador a "Nuevo pedido".** El rol `administrador`
+  puede tomar un pedido igual que un vendedor, pero no está atado a una
+  sola zona: al crear el pedido, elige explícitamente a nombre de qué
+  vendedor/zona se registra (`resolveOrderSellerId` en
+  `domain/orders.ts`). Un vendedor normal nunca ve ese selector — el
+  suyo queda fijo a su propio `seller_id` vía RLS
+  (`pedidos.current_seller_id()`, 0032).
+- **`sellers` sigue desacoplado de `zone_assignments`.** El RLS de
+  `orders`/`order_items` se particiona por `seller_id` directo (no por
+  zona), porque `zone_assignments.vendedor` nunca se pobló a partir de
+  `sellers.user_id` (ver "Pendiente" en data-model.md, sección de
+  zonas). El RLS de `customers` no cambió — sigue funcionando por zona,
+  tal como se diseñó en Fase 2.
+- **Seller "sin vendedor de campo".** Para pedidos de administrador que
+  no corresponden a ningún vendedor real, se creó un seller nuevo,
+  **"OFICINA LOGISSA (SIN VENDEDOR ASIGNADO)"** (código `SINVEND`, sin
+  zona) — deliberadamente con un nombre distinto al vendedor real ya
+  existente "OFICINA LOGISSA" (código `CODI01`, zona DISTRIBUIDORAS,
+  sembrado en 0021_seed_zonas_vendedores.sql), para no confundir
+  reportes de ese canal con pedidos administrativos sin vendedor.
+  Confirmado con el usuario el 2026-08-02.
+- **Sellers de prueba para aromero@logisalud.com / sgonzales@logisalud.com**
+  (`TEST001`/`TEST002`, sin zona). Es solo plumbing para un futuro
+  "probar el flujo como vendedor puro" — como ambos ya tienen el rol
+  `administrador`, el selector de vendedor les sigue apareciendo siempre
+  en "Nuevo pedido" (el rol admin manda sobre la presencia de un seller
+  vinculado). Para forzar el flujo estrictamente restringido de
+  vendedor harían falta cuentas que SOLO tuvieran el rol `vendedor` —
+  no se construyó ninguna feature de "suplantar rol" porque no fue
+  pedida.
+- **Trigger de `ADMINISTRATIVE_EXCEPTION` (confirmado con el usuario,
+  no es un supuesto abierto): la condición de pago elegida en el pedido
+  es distinta de `customers.condicion_pago_habitual_id`.** No hay PRD
+  accesible en el repo con el texto exacto de esta regla; se infirió de
+  que ese campo existe justo para esta comparación y de que el cambio
+  de condición de pago post-envío requiere una "approval_request de
+  excepción" — y se confirmó explícitamente antes de implementar.
+- **Auditoría explícita, no trigger genérico.** A diferencia de
+  `customers`/`product_tax_profiles` (que tienen un trigger genérico de
+  auditoría, 0017), los cambios de estado de pedido, condición de pago y
+  decisiones de aprobación se auditan con llamadas explícitas a
+  `logAudit()` desde `services/orders.ts`/`services/approvals.ts` —
+  `order_status_history`/`approval_decisions` ya son más informativos
+  que un diff jsonb genérico (tienen motivo/decisión estructurados), y
+  duplicar ambos mecanismos sería redundante.
+- **Recalculado de precios, nunca confiar en el navegador.** El precio
+  de cada línea se recalcula una única vez, en `pedidos.submit_order()`
+  (`SECURITY DEFINER`), que busca el precio vigente por sí misma en
+  `price_list_items`/`product_tax_profiles` — nunca acepta un precio
+  como parámetro, ni siquiera de un caller que sea código de servidor
+  de confianza. Esto es intencional: una función que aceptara el precio
+  ya calculado sería vulnerable a alguien que llame el RPC de Supabase
+  directamente (sin pasar por la app) con un precio falso.
+- **Límite conocido de los tests de dominio (6 y 7 del usuario).** Los
+  tests de `resolveOrderSellerFilter` y "manipulación de precio" en
+  `tests/domain/orders.test.ts` son un **proxy** de la garantía real,
+  que vive en las policies RLS de `0033_orders_core.sql` y en que
+  `pedidos.submit_order()` no acepta precios como parámetro — no hay
+  infraestructura de Postgres local (pgTAP, Supabase local) en este
+  repo para testear las policies en sí. TODO post-Fase-4: evaluar esa
+  infraestructura si el equipo la necesita.
+- **NO implementado en esta fase** (TODOs explícitos, ver también
+  workflows.md): stock (ninguna reserva antes de despacho), promociones/
+  bonificaciones/escalas de precio, GRE, factura/boleta real
+  (NubeFact), despacho real. `READY_FOR_OPERATIONS` es el punto exacto
+  donde cada uno de estos debería engancharse — ver workflows.md.
+
 ## Qué NO cubre esta fase
 
 Explícitamente fuera de alcance por ahora (ver README y CLAUDE.md):
 
-- Pedidos (siguiente paso después del importador).
 - Promociones, bonificaciones y escalas de precio — se implementan en
   un paso posterior, cuando exista esa información de Biosana y
   Prades. `products.codigo_bonificacion` ya se guarda desde ahora para
   no perder el dato mientras tanto.
-- UI de vendedor (solicitud de cliente/dirección nueva, toma de
-  pedido) — la Fase 2 solo deja lista la estructura de datos y RLS;
-  la interfaz llega en Fase 4 junto con la app de pedidos.
 - Pantalla dedicada de asignación de zonas — se gestiona vía
   SQL/dashboard de Supabase por ahora.
 - Gestión de stock.

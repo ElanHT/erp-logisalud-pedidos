@@ -7,6 +7,8 @@ export type CurrentUser = {
   email: string | null;
   fullName: string | null;
   roles: string[];
+  /** Vendedor vinculado a este usuario (pedidos.sellers.user_id), si existe. */
+  sellerId: string | null;
 };
 
 type UserRoleRow = {
@@ -33,9 +35,10 @@ export async function getCurrentUser(): Promise<CurrentUser | null> {
 
   if (!user) return null;
 
-  const [{ data: roleRows, error: roleError }, { data: profile }] = await Promise.all([
+  const [{ data: roleRows, error: roleError }, { data: profile }, { data: seller }] = await Promise.all([
     supabase.from("user_roles").select("roles(name)").eq("user_id", user.id),
     supabase.from("profiles").select("full_name").eq("id", user.id).maybeSingle(),
+    supabase.from("sellers").select("id").eq("user_id", user.id).maybeSingle(),
   ]);
 
   if (roleError) throw new Error(roleError.message);
@@ -51,6 +54,7 @@ export async function getCurrentUser(): Promise<CurrentUser | null> {
     email: user.email ?? null,
     fullName: profile?.full_name ?? null,
     roles,
+    sellerId: seller?.id ?? null,
   };
 }
 
