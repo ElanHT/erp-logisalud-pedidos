@@ -53,7 +53,7 @@ export function OrderItemComposer({
   const [discountFormItemId, setDiscountFormItemId] = useState<string | null>(null);
 
   const filteredProducts = useMemo(() => {
-    if (!productQuery.trim()) return [];
+    if (!productQuery.trim()) return products.slice(0, 15);
     const q = normalize(productQuery);
     return products.filter((p) => normalize(p.descripcion).includes(q) || normalize(p.codigo_interno).includes(q)).slice(0, 15);
   }, [products, productQuery]);
@@ -161,7 +161,9 @@ export function OrderItemComposer({
           placeholder="Buscar producto por nombre o código..."
           className="min-h-12 rounded-lg border border-gray-300 px-3 py-2"
         />
-        {filteredProducts.length > 0 && (
+        {products.length === 0 ? (
+          <p className="text-sm text-gray-500">No hay productos activos con precio vigente para agregar.</p>
+        ) : filteredProducts.length > 0 ? (
           <select name="productId" required className="min-h-12 rounded-lg border border-gray-300 px-3 py-2">
             <option value="">Selecciona un producto</option>
             {filteredProducts.map((p) => (
@@ -170,6 +172,8 @@ export function OrderItemComposer({
               </option>
             ))}
           </select>
+        ) : (
+          <p className="text-sm text-gray-500">Ningún producto coincide con esa búsqueda.</p>
         )}
         <div className="flex items-center gap-3">
           <input
