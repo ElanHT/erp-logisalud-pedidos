@@ -12,6 +12,11 @@ const SECTIONS = [
     description: "Importar y publicar listas de precios por proveedor.",
   },
   {
+    href: "/admin/maestros/clientes",
+    title: "Clientes",
+    description: "Cartera de clientes y carga masiva desde CSV.",
+  },
+  {
     href: "/admin/maestros/proveedores",
     title: "Proveedores",
     description: "Diphasac, Biosana, Prades y demás.",

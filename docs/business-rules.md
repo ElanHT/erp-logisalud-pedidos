@@ -227,6 +227,76 @@ Máquina de estados completa, diagrama y tabla de transiciones en
   (NubeFact), despacho real. `READY_FOR_OPERATIONS` es el punto exacto
   donde cada uno de estos debería engancharse — ver workflows.md.
 
+## Carga de la cartera real de clientes
+
+Decisiones confirmadas con el negocio para migrar los 3.399 clientes del
+sistema del piloto de WhatsApp. Ver `docs/data-model.md` para el detalle
+de tablas y el importador.
+
+### Tipo de comprobante por prefijo de documento
+
+El comprobante permitido se deriva del documento del cliente, no se
+elige a mano ni se deja en un default único:
+
+| Prefijo | Qué es | `tipo_comprobante_permitido` |
+|---|---|---|
+| `20` | Persona jurídica | `FACTURA` |
+| `10` | Persona natural con negocio | `FACTURA_O_BOLETA` |
+| `15` / `17` | RUC de contribuyente residual, igualmente válido | `FACTURA_O_BOLETA` |
+| cualquier otro | **No es RUC** — DNI cargado en el campo de RUC | `BOLETA` |
+
+`FACTURA_O_BOLETA` es deliberado para persona natural: el vendedor elige
+caso por caso al momento del pedido, no hay un default fijo por cliente.
+
+La restricción a `BOLETA` sin RUC válido **sigue aplicando después de que
+Control de Pedidos apruebe al cliente** — está garantizada por el
+constraint `customers_boleta_only_sin_ruc_valido` en la BD, no por la
+capa de servicio. Se levanta únicamente corrigiendo `ruc_o_documento` a
+un RUC de contribuyente real. La ficha de validación muestra la alerta
+"Posible DNI cargado como RUC — verificar documento real antes de
+aprobar" y aclara que aprobar no habilita factura.
+
+### Estado de entrada
+
+- Documento con RUC válido (`10`/`15`/`17`/`20`) → **`ACTIVO`**. Son
+  clientes que ya operan; saltan el flujo de validación, que está
+  pensado para clientes nuevos.
+- Documento sin RUC válido → **`PENDIENTE_DE_VALIDACION`**, para que
+  Control de Pedidos verifique el documento real antes de habilitarlo.
+
+### Un pedido nunca sale sin dirección de entrega
+
+**Se bloquea, no se advierte.** Preferimos frenar la toma del pedido a
+que salga un despacho sin dirección real. Es una decisión de negocio
+explícita, no una limitación técnica.
+
+La cartera migrada entró **sin ninguna dirección**: el archivo de origen
+no trae `direccion` ni `ubigeo` (0 de 3.399 filas), y el
+`distrito`/`provincia`/`departamento` que sí trae es geografía
+referencial, no una dirección de entrega. Así que la primera vez que se
+le vende a cada cliente migrado hay que capturarla.
+
+Cómo se hace cumplir, en dos niveles:
+- **Garantía dura**: `orders.customer_address_id` es `not null` (0033).
+  Un pedido sin dirección no puede existir en la BD.
+- **UX**: al elegir un cliente sin dirección activa, "Nuevo pedido"
+  bloquea el botón de continuar y muestra "Este cliente no tiene
+  dirección registrada, agrégala antes de continuar", con el formulario
+  para crearla ahí mismo — sin mandar al vendedor a otra pantalla. La
+  RLS de `customer_addresses` decide quién puede: el vendedor solo en su
+  zona y a su nombre, `control_pedidos`/`administrador` en cualquiera.
+
+Regla de dominio: `puedeTomarPedido` en `domain/customers.ts`.
+
+### Qué queda pendiente de completar
+
+- **Dirección de entrega** de los clientes migrados — se completa en
+  demanda, desde el propio flujo de pedido.
+- **`canal_id`**: queda en null. No hay dato en el origen con el que
+  derivar uno de los 6 canales de venta.
+- **`es_agente_retencion`**: queda en el default `false`. El origen no lo
+  trae, y sigue atado a los supuestos de retenciones de Fase 6.
+
 ## Qué NO cubre esta fase
 
 Explícitamente fuera de alcance por ahora (ver README y CLAUDE.md):

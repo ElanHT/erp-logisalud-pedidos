@@ -111,6 +111,49 @@ export async function listCustomerAddresses(customerId: string) {
   return data;
 }
 
+/**
+ * Registra una dirección de entrega para un cliente que ya existe. Es la
+ * salida del bloqueo "cliente sin dirección" del flujo de pedido: la
+ * cartera migrada entró sin direcciones (el origen no las traía), así que
+ * la primera vez que se le vende a un cliente hay que capturarla.
+ *
+ * No fuerza el rol: la RLS de customer_addresses ya decide quién puede
+ * (vendedor solo en su zona y a su nombre; control_pedidos/admin en
+ * cualquiera) — ver 0013_customer_addresses_contacts.sql.
+ */
+export async function addCustomerAddress(input: {
+  customerId: string;
+  direccion: string;
+  ubigeo?: string | null;
+  referencia?: string | null;
+  solicitadoPor: string;
+}): Promise<{ id: string; direccion: string; es_principal: boolean }> {
+  const supabase = createClient();
+
+  const { data: existing, error: existingError } = await supabase
+    .from("customer_addresses")
+    .select("id")
+    .eq("customer_id", input.customerId)
+    .eq("estado", "activo");
+  if (existingError) throw new Error(existingError.message);
+
+  const { data, error } = await supabase
+    .from("customer_addresses")
+    .insert({
+      customer_id: input.customerId,
+      direccion: input.direccion,
+      ubigeo: input.ubigeo ?? null,
+      referencia: input.referencia ?? null,
+      es_principal: (existing ?? []).length === 0,
+      solicitado_por: input.solicitadoPor,
+    })
+    .select("id, direccion, es_principal")
+    .single();
+
+  if (error) throw new Error(error.message);
+  return data as unknown as { id: string; direccion: string; es_principal: boolean };
+}
+
 export async function listPendingCustomers(): Promise<PendingCustomer[]> {
   const supabase = createClient();
   const { data, error } = await supabase

@@ -67,6 +67,82 @@ Columnas agregadas más allá de lo pedido explícitamente en el PRD:
 que el flujo de aprobación (quién pidió, quién aprobó, cuándo) sea
 rastreable. Ver resumen de supuestos.
 
+## Carga de la cartera real de clientes (`0041`)
+
+La cartera real (3.399 clientes) se migró del sistema del piloto de
+WhatsApp. El dato real obligó a extender el modelo de Fase 2:
+
+### Columnas nuevas en `customers`
+
+- **`vendedor_id`** (FK a `sellers`) — el vendedor titular del cliente.
+  No se puede derivar de `zona_id`: en el dato real hay clientes
+  atendidos por un vendedor distinto al titular de su zona (venían con
+  `vendedor_manual_id` en el origen). La RLS de lectura sigue siendo por
+  zona (`customers_select`), no por esta columna — agregarla no cambió
+  quién ve a quién.
+- **`zona_asignada_manualmente`** (boolean) — preserva el flag
+  `zona_manual` del origen: la zona se fijó a mano y no se derivó del
+  código de zona del vendedor. Informativo para Control de Pedidos.
+- **`distrito` / `provincia` / `departamento`** — geografía referencial,
+  deliberadamente en `customers` y **no** en `customer_addresses`: el
+  origen no trae dirección ni ubigeo (0 de 3.399 filas) y
+  `customer_addresses.direccion` es `not null`. Esta geografía **no**
+  habilita un pedido; para eso hace falta una `customer_addresses` real.
+
+### Constraint `customers_boleta_only_sin_ruc_valido`
+
+Un documento que no empieza en `10`/`15`/`17`/`20` no es RUC de
+contribuyente. El constraint obliga a `tipo_comprobante_permitido =
+'BOLETA'` en ese caso. Va como CHECK y no como validación de servicio a
+propósito: **tiene que sobrevivir a que Control de Pedidos apruebe al
+cliente**. Aprobar no habilita factura; lo único que la habilita es
+corregir `ruc_o_documento` a un RUC real, y ahí el constraint deja de
+aplicar por sí solo. Espejo en TS:
+`domain/customers.ts` (`resolveTipoComprobantePermitido`).
+
+### Tablas nuevas
+
+- **`customer_seller_reassignments`** — historial de cambios de cartera
+  (`vendedor_anterior_id`, `vendedor_nuevo_id`, `fecha_reasignacion`,
+  `fuente`). Visibilidad heredada del cliente padre; escritura solo
+  `control_pedidos`/`administrador`. `fuente = 'migracion_piloto'` marca
+  lo migrado, para que reimportar lo reemplace sin tocar lo registrado
+  desde la app (`fuente = 'app'`).
+- **`legacy_vendor_snapshots`** — snapshot histórico de cartera del
+  sistema de cobranzas (`ruc`, `vendedor_id_snapshot`, `fuente`,
+  `fecha_carga`). Solo referencia: **no** define el vendedor actual de
+  nadie y ningún flujo del sistema lo consulta. Sin FK a `customers` a
+  propósito (guarda el `ruc` tal como vino) y sin policy de
+  `INSERT`/`UPDATE`/`DELETE` para `authenticated` — se carga una única
+  vez con la service role key y desde la app es de solo lectura.
+
+### Importador (`services/customers-import.ts`)
+
+Mismo patrón que el de listas de precios: preview → confirmación →
+publicación, con reporte de filas rechazadas. Se eligió importador por
+sobre un seed SQL versionado porque son 3.399 razones sociales y 456
+celulares — PII que no debe quedar en el historial de git.
+
+Recibe dos CSV: clientes y vendedores. Del de vendedores lee
+**únicamente** `id` y `codigo`, para traducir el uuid del sistema de
+origen al `codigo_representante`; el archivo de origen trae además una
+columna `token_acceso` con tokens en claro que se descarta y nunca se
+persiste (ver `buildLegacyVendorMap` en `domain/customer-import.ts`).
+
+Es idempotente: los clientes se upsertan por `ruc_o_documento`, y el
+historial migrado y el snapshot legacy se reemplazan en vez de
+acumularse. Usa la service role key porque crea clientes en `ACTIVO`,
+algo que ninguna policy de RLS permite — queda registrado en
+`audit_logs` con el actor real (`importar_cartera_clientes`).
+
+El origen no trae condición de pago ni canal:
+- `condicion_pago_habitual_id` es un **parámetro explícito** del
+  importador (no un default inventado). Dejarlo en null haría que todo
+  pedido cayera en `ADMINISTRATIVE_EXCEPTION`, porque la bifurcación
+  compara la condición del pedido contra la habitual del cliente.
+- `canal_id` queda en **null**: no hay ningún dato en el CSV con el que
+  derivar uno de los 6 canales. Pendiente de completar.
+
 ## Productos y tratamiento tributario
 
 - `products`: datos del producto. **No** incluye ningún campo de

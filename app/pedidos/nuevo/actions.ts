@@ -3,11 +3,35 @@
 import { redirect } from "next/navigation";
 import { getCurrentUser, requireUserId } from "@/lib/auth/session";
 import { resolveOrderSellerId } from "@/domain/orders";
+import { MENSAJE_SIN_DIRECCION } from "@/domain/customers";
 import { createDraftOrder } from "@/services/orders";
-import { listCustomerAddresses, requestNewCustomer } from "@/services/customers";
+import { addCustomerAddress, listCustomerAddresses, requestNewCustomer } from "@/services/customers";
 
 export async function getAddressesForCustomer(customerId: string) {
   return listCustomerAddresses(customerId);
+}
+
+/**
+ * Alta de dirección desde el propio flujo de pedido, para desbloquear a
+ * un cliente de la cartera migrada que entró sin dirección de entrega.
+ */
+export async function agregarDireccionCliente(input: {
+  customerId: string;
+  direccion: string;
+  referencia?: string;
+}) {
+  const userId = await requireUserId();
+
+  const direccion = input.direccion.trim();
+  if (!input.customerId) throw new Error("Falta el cliente.");
+  if (!direccion) throw new Error("La dirección es requerida.");
+
+  return addCustomerAddress({
+    customerId: input.customerId,
+    direccion,
+    referencia: input.referencia?.trim() || null,
+    solicitadoPor: userId,
+  });
 }
 
 export async function crearClienteNuevo(input: {
@@ -64,7 +88,13 @@ export async function crearBorrador(formData: FormData) {
   const paymentTermsId = Number(formData.get("paymentTermsId"));
 
   if (!customerId) throw new Error("Selecciona un cliente.");
-  if (!customerAddressId) throw new Error("Selecciona una dirección.");
+  if (!customerAddressId) {
+    // Se distingue "no eligió" de "no hay ninguna": la cartera migrada
+    // entró sin direcciones, y el segundo caso necesita un mensaje que
+    // diga qué hacer, no solo que falta un campo.
+    const direcciones = await listCustomerAddresses(customerId);
+    throw new Error(direcciones.length === 0 ? MENSAJE_SIN_DIRECCION : "Selecciona una dirección.");
+  }
   if (!paymentTermsId) throw new Error("Selecciona una condición de pago.");
 
   const draft = await createDraftOrder({
