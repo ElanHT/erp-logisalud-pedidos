@@ -76,6 +76,20 @@ un trigger de auditoría de respaldo además de la llamada a `logAudit()`
 desde la capa de servicio — ver la sección de auditoría en
 [docs/architecture.md](docs/architecture.md) para el criterio.
 
+**Las migraciones se aplican solas al mergear a `main`** (integración de
+Supabase con GitHub), así que hay que probarlas antes del merge. El
+contenedor trae `postgresql-16`: se puede correr la cadena completa
+contra una base local stubbeando lo que da Supabase — ver "Migraciones"
+en [docs/architecture.md](docs/architecture.md).
+
+Dos trampas concretas, ambas encontradas en producción:
+
+- Un `CHECK` nuevo **se valida contra la tabla entera** al crearse. Si
+  puede haber filas que no cumplan, hay que normalizarlas en la misma
+  migración *antes* de agregar el constraint.
+- Escribir cada migración **re-ejecutable** (`if not exists`, `drop
+  policy if exists`): un reintento tras un fallo es lo normal.
+
 ## Antes de implementar lógica de negocio de pedidos
 
 No implementar precios, promociones, stock, NubeFact ni retenciones sin

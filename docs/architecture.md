@@ -195,3 +195,31 @@ registro del fallo podría fallar.
 - Repo y proyecto de Vercel **separados** de `erp-logisalud`.
 - Deploy automático configurado desde `main`, sin despliegue a
   producción en esta fase (ver README para el estado exacto del link).
+
+### Migraciones: las aplica la integración de Supabase con GitHub
+
+Las migraciones de `supabase/migrations/` **ya no se aplican a mano**: la
+integración de Supabase con GitHub las corre al mergear a `main`. Con
+branching activado, además cada pull request recibe su propia base de
+preview.
+
+Consecuencia práctica: una migración mergeada se aplica sola, así que
+tiene que estar probada **antes** del merge. Se puede correr toda la
+cadena contra un Postgres local — el contenedor de desarrollo trae
+`postgresql-16` — stubbeando lo que provee Supabase (`auth.users`,
+`auth.uid()`, los roles `anon`/`authenticated`/`service_role`, el schema
+`storage`).
+
+Dos cosas que se aprendieron aplicándolo por primera vez:
+
+- **La integración lleva su propio historial** en
+  `supabase_migrations.schema_migrations`. Las migraciones aplicadas a
+  mano antes de activar la integración no están ahí, así que hay que
+  registrarlas como aplicadas una única vez (equivalente a
+  `supabase migration repair --status applied`) o la integración intenta
+  correr todo desde `0001` y falla con "already exists".
+- **Conviene que cada migración sea re-ejecutable** (`add column if not
+  exists`, `create table if not exists`, `drop policy if exists` antes de
+  cada `create policy`, y los constraints guardados por una consulta a
+  `pg_constraint`). Un reintento tras un fallo parcial es el caso normal,
+  no la excepción.
