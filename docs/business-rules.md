@@ -341,6 +341,42 @@ priorizar esta corrección antes de operar a volumen.
 - **`es_agente_retencion`**: queda en el default `false`. El origen no lo
   trae, y sigue atado a los supuestos de retenciones de Fase 6.
 
+## Notificación por correo al enviar un pedido
+
+Al pasar de `DRAFT` a `SUBMITTED` se manda un correo con el detalle del
+pedido a los destinatarios activos de
+`pedidos.order_notification_recipients`. Reemplaza la idea previa de un
+PDF descargable en la app.
+
+- **Contenido**: datos del cliente (razón social, RUC/documento, dirección
+  de entrega, canal, zona), vendedor responsable, condición de pago,
+  tabla de productos (código, descripción, cantidad, precio unitario,
+  IGV, subtotal, total por línea), total general con IGV desglosado,
+  fecha/hora de envío y número de pedido.
+- **Los importes no se recalculan** para el correo: se suman las líneas
+  que ya grabó `submit_order`. El correo no puede contradecir a la BD.
+- **Nota obligatoria en el correo**: "Documento de control interno — no
+  válido como comprobante de pago. El comprobante electrónico se genera
+  al momento del despacho."
+- **Lista vacía no es un error**: el pedido se envía igual y queda
+  registrado como `sin_destinatarios` en `notification_logs` (y en
+  `audit_logs`, porque ahí la causa es configuración pendiente).
+- **Un fallo de envío no revierte nada**: el pedido ya está `SUBMITTED`.
+  Queda como `fallido` en `notification_logs` para reintentar a mano.
+- Solo el **administrador** gestiona la lista, en
+  `/admin/configuracion/notificaciones`.
+
+### Número de pedido
+
+`orders.numero` es un correlativo global que asigna la BD al crear el
+pedido — **incluido el borrador**, así que la numeración tiene huecos si
+un borrador se abandona. Se aceptó a cambio de que el número sea estable
+desde el minuto uno: si se asignara al enviar, el mismo pedido cambiaría
+de identificador a mitad del flujo.
+
+**No es un número de comprobante fiscal.** Ese lo emite el proveedor de
+facturación electrónica al despachar, y no tiene por qué coincidir.
+
 ## Qué NO cubre esta fase
 
 Explícitamente fuera de alcance por ahora (ver README y CLAUDE.md):

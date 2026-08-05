@@ -41,6 +41,11 @@ const SECTIONS = [
     title: "Validación de clientes",
     description: "Aprobar o rechazar clientes nuevos solicitados por vendedores.",
   },
+  {
+    href: "/admin/configuracion/notificaciones",
+    title: "Notificaciones de pedidos",
+    description: "A qué correos se avisa cuando un vendedor envía un pedido.",
+  },
 ];
 
 export default function AdminHomePage() {

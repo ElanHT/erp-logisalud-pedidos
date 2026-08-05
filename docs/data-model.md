@@ -380,6 +380,56 @@ sellers de prueba). Resumen técnico:
   a tocarlos después (la reevaluación tras una excepción resuelta usa
   `pedidos.reevaluate_order()`, que solo re-decide la bifurcación).
 
+## Notificación de pedidos (`0044`)
+
+### `orders.numero`
+
+Correlativo global legible, `bigint generated always as identity`. Se
+agregó porque `orders` solo se identificaba por uuid, y un uuid no sirve
+como referencia en el asunto de un correo ni para que Operaciones hable
+del pedido por teléfono.
+
+Dos detalles del `add column`:
+- `generated always as identity` **numera también las filas existentes**
+  al aplicar la migración, así que no hizo falta backfill aparte.
+- Es `always` y no `by default`: el número lo asigna la BD, nunca el
+  caller.
+
+Se asigna al **crear** el pedido, no al enviarlo — así el número es
+estable desde el borrador. Consecuencia aceptada: la numeración tiene
+huecos cuando un borrador se abandona.
+
+### `order_notification_recipients`
+
+`id`, `email`, `nombre_referencial`, `activo`, `fecha_creacion`.
+
+- Unique sobre `lower(email)`, no sobre `email`: el mismo buzón en
+  distinta capitalización mandaría el correo dos veces.
+- Índice parcial sobre `activo where activo` — la consulta del envío solo
+  busca activos.
+- Check de forma del email (`~ '^[^@ ]+@[^@ ]+\.[^@ ]+$'`) como red
+  mínima. La validación real la hace el proveedor al intentar entregar;
+  no se pretende validar RFC 5322 con un constraint.
+- RLS: policy `for all` solo para `administrador`. Sin lectura para otros
+  roles.
+
+### `notification_logs`
+
+`order_id`, `tipo`, `estado` (`enviado` / `fallido` / `sin_destinatarios`),
+`destinatarios text[]`, `proveedor`, `proveedor_message_id`,
+`error_mensaje`, `created_at`.
+
+`order_id` es `on delete set null`: si un pedido se borrara, el registro
+de que se intentó notificar sigue siendo información útil.
+
+RLS: `select` solo para `administrador`. **No hay policy de escritura**
+para `authenticated` — el servicio escribe con la service role key,
+porque si registrar un fallo de envío dependiera de una policy, el
+registro del fallo podría fallar.
+
+Ver `docs/architecture.md` para el proveedor de correo, las variables de
+entorno y por qué el correo nunca bloquea el envío del pedido.
+
 ## Auditoría
 
 Todo cambio en `customers` y en `product_tax_profiles` queda en
