@@ -12,6 +12,11 @@ const SECTIONS = [
     description: "Importar y publicar listas de precios por proveedor.",
   },
   {
+    href: "/admin/maestros/clientes",
+    title: "Clientes",
+    description: "Cartera de clientes y carga masiva desde CSV.",
+  },
+  {
     href: "/admin/maestros/proveedores",
     title: "Proveedores",
     description: "Diphasac, Biosana, Prades y demás.",
@@ -35,6 +40,11 @@ const SECTIONS = [
     href: "/control-pedidos/validacion-clientes",
     title: "Validación de clientes",
     description: "Aprobar o rechazar clientes nuevos solicitados por vendedores.",
+  },
+  {
+    href: "/admin/configuracion/notificaciones",
+    title: "Notificaciones de pedidos",
+    description: "A qué correos se avisa cuando un vendedor envía un pedido.",
   },
 ];
 

@@ -9,13 +9,18 @@ pedidos de LOGISALUD. **Repo independiente** de `erp-logisalud` (ERP de
 Cuentas por Cobrar) — no asumir código, tablas ni convenciones de ese
 repo salvo la identidad visual de marca.
 
-Estado: Fase 1 (base técnica) y Fase 2 (maestros: clientes, zonas,
+Estado: Fase 1 (base técnica), Fase 2 (maestros: clientes, zonas,
 productos, proveedores, canales, condiciones de pago, configuración
-tributaria) completadas. No hay todavía pedidos, motor de
-precios/promociones, gestión de stock, integración NubeFact ni cálculo
-de retenciones — eso es Fase 3 en adelante. Antes de implementar
-cualquiera de esos, leer [docs/business-rules.md](docs/business-rules.md)
-y [docs/data-model.md](docs/data-model.md) — hay supuestos de negocio
+tributaria) y Fase 4 (pedidos hasta `READY_FOR_OPERATIONS`, importador de
+listas de precios) completadas. La cartera real de clientes ya está
+cargada vía importador CSV (ver "Carga de la cartera real de clientes" en
+[docs/data-model.md](docs/data-model.md)).
+
+No hay todavía motor de promociones/escalas, gestión de stock, despacho
+real, integración NubeFact ni cálculo de retenciones — eso es Fase 5 en
+adelante. Antes de implementar cualquiera de esos, leer
+[docs/business-rules.md](docs/business-rules.md) y
+[docs/data-model.md](docs/data-model.md) — hay supuestos de negocio
 marcados explícitamente como "pendientes de confirmar con Contabilidad".
 
 ## Stack y convenciones

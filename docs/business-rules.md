@@ -227,6 +227,156 @@ Máquina de estados completa, diagrama y tabla de transiciones en
   (NubeFact), despacho real. `READY_FOR_OPERATIONS` es el punto exacto
   donde cada uno de estos debería engancharse — ver workflows.md.
 
+## Carga de la cartera real de clientes
+
+Decisiones confirmadas con el negocio para migrar los 3.399 clientes del
+sistema del piloto de WhatsApp. Ver `docs/data-model.md` para el detalle
+de tablas y el importador.
+
+### Tipo de comprobante por prefijo de documento
+
+El comprobante permitido se deriva del documento del cliente, no se
+elige a mano ni se deja en un default único:
+
+| Prefijo | Qué es | `tipo_comprobante_permitido` |
+|---|---|---|
+| `20` | Persona jurídica | `FACTURA` |
+| `10` | Persona natural con negocio | `FACTURA_O_BOLETA` |
+| `15` / `17` | RUC de contribuyente residual, igualmente válido | `FACTURA_O_BOLETA` |
+| cualquier otro | **No es RUC** — DNI cargado en el campo de RUC | `BOLETA` |
+
+`FACTURA_O_BOLETA` es deliberado para persona natural: el vendedor elige
+caso por caso al momento del pedido, no hay un default fijo por cliente.
+
+La restricción a `BOLETA` sin RUC válido **sigue aplicando después de que
+Control de Pedidos apruebe al cliente** — está garantizada por el
+constraint `customers_boleta_only_sin_ruc_valido` en la BD, no por la
+capa de servicio. Se levanta únicamente corrigiendo `ruc_o_documento` a
+un RUC de contribuyente real. La ficha de validación muestra la alerta
+"Posible DNI cargado como RUC — verificar documento real antes de
+aprobar" y aclara que aprobar no habilita factura.
+
+### Estado de entrada
+
+- Documento con RUC válido (`10`/`15`/`17`/`20`) → **`ACTIVO`**. Son
+  clientes que ya operan; saltan el flujo de validación, que está
+  pensado para clientes nuevos.
+- Documento sin RUC válido → **`PENDIENTE_DE_VALIDACION`**, para que
+  Control de Pedidos verifique el documento real antes de habilitarlo.
+
+### Un pedido nunca sale sin dirección de entrega
+
+**Se bloquea, no se advierte.** Preferimos frenar la toma del pedido a
+que salga un despacho sin dirección real. Es una decisión de negocio
+explícita, no una limitación técnica.
+
+La cartera migrada entró **sin ninguna dirección**: el archivo de origen
+no trae `direccion` ni `ubigeo` (0 de 3.399 filas), y el
+`distrito`/`provincia`/`departamento` que sí trae es geografía
+referencial, no una dirección de entrega. Así que la primera vez que se
+le vende a cada cliente migrado hay que capturarla.
+
+Cómo se hace cumplir, en dos niveles:
+- **Garantía dura**: `orders.customer_address_id` es `not null` (0033).
+  Un pedido sin dirección no puede existir en la BD.
+- **UX**: al elegir un cliente sin dirección activa, "Nuevo pedido"
+  bloquea el botón de continuar y muestra "Este cliente no tiene
+  dirección registrada, agrégala antes de continuar", con el formulario
+  para crearla ahí mismo — sin mandar al vendedor a otra pantalla. La
+  RLS de `customer_addresses` decide quién puede: el vendedor solo en su
+  zona y a su nombre, `control_pedidos`/`administrador` en cualquiera.
+
+Regla de dominio: `puedeTomarPedido` en `domain/customers.ts`.
+
+### Condición de pago: sin habitual definida
+
+Los 3.399 clientes migrados entran **sin condición de pago habitual**
+(`condicion_pago_habitual_id = null`). El archivo de origen no trae el
+dato y no se inventa uno por cliente: el vendedor elige la condición al
+armar cada pedido, igual que ya funciona para clientes nuevos.
+
+Consecuencia que hubo que resolver: la bifurcación automática manda a
+`ADMINISTRATIVE_EXCEPTION` cuando la condición del pedido difiere de la
+habitual del cliente. **Sin habitual definida no hay nada con qué
+comparar, así que cualquier condición que elija el vendedor se acepta sin
+excepción.** Implementado en `0043` (SQL, la autoridad) y en
+`computeAutomaticValidationOutcome` (`domain/orders.ts`, el espejo que
+alimenta la UI) — ver `docs/data-model.md` para por qué las dos
+implementaciones no coincidían antes de este cambio.
+
+El catálogo de condiciones de pago se completó en `0042`: además de
+`Contado`, ahora existen `Crédito 30 / 45 / 60 / 90 / 120 días`.
+
+**Pendiente:** asignar la condición habitual real cliente por cliente,
+cuando el negocio la defina. Mientras no exista, el flujo funciona — pero
+el sistema no puede detectar que un vendedor pidió una condición inusual
+para ese cliente, porque no sabe cuál es la usual.
+
+### Canal de venta: `Horizontal` como supuesto temporal
+
+Los 3.399 entran con **canal `Horizontal`**. Es un supuesto explícito, no
+un dato real: el archivo de origen no trae clasificación de canal.
+
+A diferencia de la condición de pago, acá dejarlo en null no era una
+opción: el precio se busca por canal en `price_list_items`, y
+`submit_order` aborta con "El cliente no tiene canal de venta asignado;
+no se puede calcular precio". Sin este default **ningún cliente de la
+cartera podría recibir un pedido**. Este supuesto es, en la práctica, lo
+que deja la cartera operativa.
+
+**Pendiente:** el negocio va a entregar la clasificación real
+(Mayorista / Horizontal / Minicadenas / Tops / Clínicas /
+Subdistribuidores) para corregir caso por caso. Hasta entonces, todo
+cliente migrado se cotiza a precio de canal Horizontal — si su canal real
+era otro, **el precio que ve el vendedor es el equivocado**. Vale
+priorizar esta corrección antes de operar a volumen.
+
+### Qué queda pendiente de completar
+
+- **Dirección de entrega** de los clientes migrados — se completa en
+  demanda, desde el propio flujo de pedido.
+- **Condición de pago habitual** — ver arriba.
+- **Canal de venta real** — ver arriba. Es el más urgente de los tres:
+  afecta el precio, no solo el flujo.
+- **`es_agente_retencion`**: queda en el default `false`. El origen no lo
+  trae, y sigue atado a los supuestos de retenciones de Fase 6.
+
+## Notificación por correo al enviar un pedido
+
+Al pasar de `DRAFT` a `SUBMITTED` se manda un correo con el detalle del
+pedido a los destinatarios activos de
+`pedidos.order_notification_recipients`. Reemplaza la idea previa de un
+PDF descargable en la app.
+
+- **Contenido**: datos del cliente (razón social, RUC/documento, dirección
+  de entrega, canal, zona), vendedor responsable, condición de pago,
+  tabla de productos (código, descripción, cantidad, precio unitario,
+  IGV, subtotal, total por línea), total general con IGV desglosado,
+  fecha/hora de envío y número de pedido.
+- **Los importes no se recalculan** para el correo: se suman las líneas
+  que ya grabó `submit_order`. El correo no puede contradecir a la BD.
+- **Nota obligatoria en el correo**: "Documento de control interno — no
+  válido como comprobante de pago. El comprobante electrónico se genera
+  al momento del despacho."
+- **Lista vacía no es un error**: el pedido se envía igual y queda
+  registrado como `sin_destinatarios` en `notification_logs` (y en
+  `audit_logs`, porque ahí la causa es configuración pendiente).
+- **Un fallo de envío no revierte nada**: el pedido ya está `SUBMITTED`.
+  Queda como `fallido` en `notification_logs` para reintentar a mano.
+- Solo el **administrador** gestiona la lista, en
+  `/admin/configuracion/notificaciones`.
+
+### Número de pedido
+
+`orders.numero` es un correlativo global que asigna la BD al crear el
+pedido — **incluido el borrador**, así que la numeración tiene huecos si
+un borrador se abandona. Se aceptó a cambio de que el número sea estable
+desde el minuto uno: si se asignara al enviar, el mismo pedido cambiaría
+de identificador a mitad del flujo.
+
+**No es un número de comprobante fiscal.** Ese lo emite el proveedor de
+facturación electrónica al despachar, y no tiene por qué coincidir.
+
 ## Qué NO cubre esta fase
 
 Explícitamente fuera de alcance por ahora (ver README y CLAUDE.md):

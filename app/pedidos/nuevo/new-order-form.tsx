@@ -1,7 +1,13 @@
 "use client";
 
 import { useMemo, useState, useTransition } from "react";
-import { crearBorrador, crearClienteNuevo, getAddressesForCustomer } from "./actions";
+import { MENSAJE_SIN_DIRECCION } from "@/domain/customers";
+import {
+  agregarDireccionCliente,
+  crearBorrador,
+  crearClienteNuevo,
+  getAddressesForCustomer,
+} from "./actions";
 
 type Seller = { id: string; codigo_representante: string; nombre_completo: string; zone: { nombre: string } | null };
 type Customer = { id: string; razon_social: string; ruc_o_documento: string };
@@ -41,6 +47,8 @@ export function NewOrderForm({
   const [loadingAddresses, setLoadingAddresses] = useState(false);
   const [showNewCustomerForm, setShowNewCustomerForm] = useState(false);
   const [newCustomerError, setNewCustomerError] = useState<string | null>(null);
+  const [newAddress, setNewAddress] = useState({ direccion: "", referencia: "" });
+  const [newAddressError, setNewAddressError] = useState<string | null>(null);
   const [newCustomer, setNewCustomer] = useState({
     razonSocial: "",
     rucODocumento: "",
@@ -54,16 +62,40 @@ export function NewOrderForm({
     setNewCustomer((prev) => ({ ...prev, [field]: value }));
   }
 
+  // Cliente elegido, direcciones ya cargadas, y ninguna: el pedido queda
+  // bloqueado hasta registrar una.
+  const sinDireccion = !!selectedCustomerId && !loadingAddresses && addresses.length === 0;
+
   const filteredCustomers = useMemo(() => {
     if (!customerQuery.trim()) return customers.slice(0, 20);
     const q = normalize(customerQuery);
     return customers.filter((c) => normalize(c.razon_social).includes(q) || normalize(c.ruc_o_documento).includes(q)).slice(0, 20);
   }, [customers, customerQuery]);
 
+  function handleAddAddress() {
+    setNewAddressError(null);
+    startTransition(async () => {
+      try {
+        const created = await agregarDireccionCliente({
+          customerId: selectedCustomerId,
+          direccion: newAddress.direccion,
+          referencia: newAddress.referencia,
+        });
+        setAddresses((prev) => [...prev, created]);
+        setSelectedAddressId(created.id);
+        setNewAddress({ direccion: "", referencia: "" });
+      } catch (err) {
+        setNewAddressError(err instanceof Error ? err.message : "No se pudo guardar la dirección.");
+      }
+    });
+  }
+
   function handleSelectCustomer(customerId: string) {
     setSelectedCustomerId(customerId);
     setAddresses([]);
     setSelectedAddressId("");
+    setNewAddressError(null);
+    setNewAddress({ direccion: "", referencia: "" });
     if (!customerId) return;
     setLoadingAddresses(true);
     startTransition(async () => {
@@ -250,6 +282,38 @@ export function NewOrderForm({
           <label className="mb-1 block text-sm font-medium text-gray-700">Dirección de entrega</label>
           {loadingAddresses ? (
             <p className="text-sm text-gray-500">Cargando direcciones...</p>
+          ) : sinDireccion ? (
+            // Bloqueo intencional, no advertencia: preferimos frenar la
+            // toma del pedido a que salga un despacho sin dirección real
+            // (ver docs/business-rules.md). Los clientes de la cartera
+            // migrada entraron sin dirección, así que se captura acá
+            // mismo en vez de mandar al vendedor a otra pantalla.
+            <div className="flex flex-col gap-2 rounded-lg border-2 border-amber-300 bg-amber-50 p-3">
+              <p className="text-sm font-medium text-amber-900">⚠ {MENSAJE_SIN_DIRECCION}</p>
+              {newAddressError && (
+                <p className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">{newAddressError}</p>
+              )}
+              <input
+                value={newAddress.direccion}
+                onChange={(e) => setNewAddress((prev) => ({ ...prev, direccion: e.target.value }))}
+                placeholder="Dirección de entrega"
+                className="min-h-12 rounded-lg border border-gray-300 px-3 py-2 text-sm"
+              />
+              <input
+                value={newAddress.referencia}
+                onChange={(e) => setNewAddress((prev) => ({ ...prev, referencia: e.target.value }))}
+                placeholder="Referencia (opcional)"
+                className="min-h-12 rounded-lg border border-gray-300 px-3 py-2 text-sm"
+              />
+              <button
+                type="button"
+                onClick={handleAddAddress}
+                className="btn-secondary self-start text-sm"
+                disabled={isPending || !newAddress.direccion.trim()}
+              >
+                Guardar dirección y continuar
+              </button>
+            </div>
           ) : (
             <select
               name="customerAddressId"
@@ -281,7 +345,12 @@ export function NewOrderForm({
         </select>
       </div>
 
-      <button type="submit" className="btn-primary" disabled={isPending}>
+      <button
+        type="submit"
+        className="btn-primary"
+        disabled={isPending || sinDireccion}
+        title={sinDireccion ? MENSAJE_SIN_DIRECCION : undefined}
+      >
         Crear borrador y continuar
       </button>
     </form>

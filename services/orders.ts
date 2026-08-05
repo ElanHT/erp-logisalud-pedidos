@@ -1,6 +1,7 @@
 import "server-only";
 import { createClient } from "@/lib/supabase/server";
 import { logAudit } from "./audit-log";
+import { notifyOrderSubmitted, type NotifyResult } from "./order-notifications";
 import { calculateLineItem, canEditPaymentTerms } from "@/domain/orders";
 
 export type OrderSummary = {
@@ -255,7 +256,12 @@ export async function updatePaymentTerms(orderId: string, paymentTermsId: number
   });
 }
 
-export type SubmitOrderResult = { estadoResultado: string; priceDrift: Array<{ orderItemId: string; precioAnterior: number; precioNuevo: number }> };
+export type SubmitOrderResult = {
+  estadoResultado: string;
+  priceDrift: Array<{ orderItemId: string; precioAnterior: number; precioNuevo: number }>;
+  /** Desenlace de la notificación por correo. Informativo: nunca bloquea el envío. */
+  notificacion: NotifyResult;
+};
 
 export async function submitOrder(orderId: string, actor: string): Promise<SubmitOrderResult> {
   const supabase = createClient();
@@ -270,7 +276,18 @@ export async function submitOrder(orderId: string, actor: string): Promise<Submi
     datosDespues: data,
   });
 
-  return { estadoResultado: data.estadoResultado, priceDrift: data.priceDrift ?? [] };
+  // Notificación por correo a la lista de destinatarios. Va DESPUÉS del
+  // RPC y de la auditoría, y notifyOrderSubmitted no lanza nunca: el
+  // pedido ya quedó SUBMITTED y un proveedor de correo caído no puede
+  // revertirlo ni mostrarle un error al vendedor. El desenlace queda en
+  // pedidos.notification_logs para reintentar a mano.
+  const notificacion = await notifyOrderSubmitted(orderId, data.estadoResultado, actor);
+
+  return {
+    estadoResultado: data.estadoResultado,
+    priceDrift: data.priceDrift ?? [],
+    notificacion,
+  };
 }
 
 export async function repeatLastOrder(sellerId: string, actor: string) {

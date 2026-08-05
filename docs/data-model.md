@@ -67,6 +67,117 @@ Columnas agregadas más allá de lo pedido explícitamente en el PRD:
 que el flujo de aprobación (quién pidió, quién aprobó, cuándo) sea
 rastreable. Ver resumen de supuestos.
 
+## Carga de la cartera real de clientes (`0041`)
+
+La cartera real (3.399 clientes) se migró del sistema del piloto de
+WhatsApp. El dato real obligó a extender el modelo de Fase 2:
+
+### Columnas nuevas en `customers`
+
+- **`vendedor_id`** (FK a `sellers`) — el vendedor titular del cliente.
+  No se puede derivar de `zona_id`: en el dato real hay clientes
+  atendidos por un vendedor distinto al titular de su zona (venían con
+  `vendedor_manual_id` en el origen). La RLS de lectura sigue siendo por
+  zona (`customers_select`), no por esta columna — agregarla no cambió
+  quién ve a quién.
+- **`zona_asignada_manualmente`** (boolean) — preserva el flag
+  `zona_manual` del origen: la zona se fijó a mano y no se derivó del
+  código de zona del vendedor. Informativo para Control de Pedidos.
+- **`distrito` / `provincia` / `departamento`** — geografía referencial,
+  deliberadamente en `customers` y **no** en `customer_addresses`: el
+  origen no trae dirección ni ubigeo (0 de 3.399 filas) y
+  `customer_addresses.direccion` es `not null`. Esta geografía **no**
+  habilita un pedido; para eso hace falta una `customer_addresses` real.
+
+### Constraint `customers_boleta_only_sin_ruc_valido`
+
+Un documento que no empieza en `10`/`15`/`17`/`20` no es RUC de
+contribuyente. El constraint obliga a `tipo_comprobante_permitido =
+'BOLETA'` en ese caso. Va como CHECK y no como validación de servicio a
+propósito: **tiene que sobrevivir a que Control de Pedidos apruebe al
+cliente**. Aprobar no habilita factura; lo único que la habilita es
+corregir `ruc_o_documento` a un RUC real, y ahí el constraint deja de
+aplicar por sí solo. Espejo en TS:
+`domain/customers.ts` (`resolveTipoComprobantePermitido`).
+
+### Tablas nuevas
+
+- **`customer_seller_reassignments`** — historial de cambios de cartera
+  (`vendedor_anterior_id`, `vendedor_nuevo_id`, `fecha_reasignacion`,
+  `fuente`). Visibilidad heredada del cliente padre; escritura solo
+  `control_pedidos`/`administrador`. `fuente = 'migracion_piloto'` marca
+  lo migrado, para que reimportar lo reemplace sin tocar lo registrado
+  desde la app (`fuente = 'app'`).
+- **`legacy_vendor_snapshots`** — snapshot histórico de cartera del
+  sistema de cobranzas (`ruc`, `vendedor_id_snapshot`, `fuente`,
+  `fecha_carga`). Solo referencia: **no** define el vendedor actual de
+  nadie y ningún flujo del sistema lo consulta. Sin FK a `customers` a
+  propósito (guarda el `ruc` tal como vino) y sin policy de
+  `INSERT`/`UPDATE`/`DELETE` para `authenticated` — se carga una única
+  vez con la service role key y desde la app es de solo lectura.
+
+### Importador (`services/customers-import.ts`)
+
+Mismo patrón que el de listas de precios: preview → confirmación →
+publicación, con reporte de filas rechazadas. Se eligió importador por
+sobre un seed SQL versionado porque son 3.399 razones sociales y 456
+celulares — PII que no debe quedar en el historial de git.
+
+Recibe dos CSV: clientes y vendedores. Del de vendedores lee
+**únicamente** `id` y `codigo`, para traducir el uuid del sistema de
+origen al `codigo_representante`; el archivo de origen trae además una
+columna `token_acceso` con tokens en claro que se descarta y nunca se
+persiste (ver `buildLegacyVendorMap` en `domain/customer-import.ts`).
+
+Es idempotente: los clientes se upsertan por `ruc_o_documento`, y el
+historial migrado y el snapshot legacy se reemplazan en vez de
+acumularse. Usa la service role key porque crea clientes en `ACTIVO`,
+algo que ninguna policy de RLS permite — queda registrado en
+`audit_logs` con el actor real (`importar_cartera_clientes`).
+
+El origen no trae condición de pago ni canal, y cada caso se resolvió
+distinto porque las consecuencias de dejarlos en null son distintas:
+
+- **`condicion_pago_habitual_id` queda en `null`** para los 3.399. La
+  columna ya era nullable desde `0012`, así que no hizo falta ni cambio de
+  schema ni un valor centinela tipo `SIN_DEFINIR` — que además habría
+  contaminado el catálogo `payment_terms` con una fila que no es una
+  condición de pago real. El vendedor elige la condición al armar cada
+  pedido. Para que eso no dispare excepción administrativa, ver `0043`
+  más abajo.
+- **`canal_id` se asigna a `Horizontal`** para los 3.399, como supuesto
+  temporal explícito. Acá null no era opción: `submit_order` (`0036`)
+  aborta con "El cliente no tiene canal de venta asignado; no se puede
+  calcular precio", porque el precio se busca por canal en
+  `price_list_items`. Sin este default la cartera entera quedaría
+  inoperativa. Se corrige cliente por cliente cuando el negocio entregue
+  la clasificación real.
+
+### `0043` — condición habitual en null no es excepción administrativa
+
+La bifurcación automática dispara `ADMINISTRATIVE_EXCEPTION` cuando la
+condición del pedido difiere de la habitual del cliente. Con la habitual
+en null no hay nada que comparar, así que cualquier condición que elija
+el vendedor debe pasar.
+
+Ojo con la asimetría entre las dos implementaciones, que es la razón por
+la que esta migración existe:
+
+- En **SQL**, `payment_terms_id <> NULL` evalúa a `NULL`, y un `elsif`
+  trata `NULL` como falso — así que el comportamiento correcto ya
+  ocurría, pero **por accidente** de la lógica ternaria de Postgres, no
+  porque estuviera escrito. Cualquiera que envuelva la condición en un
+  `coalesce`, la niegue, o la mueva a un `CASE` la rompe sin notarlo.
+  `0043` reemplaza `submit_order` y `reevaluate_order` con la condición
+  explícita (`is not null and <>`). No cambia el comportamiento; lo hace
+  intencional.
+- En **TypeScript** sí estaba mal: `5 !== null` es `true`, así que
+  `computeAutomaticValidationOutcome` devolvía `ADMINISTRATIVE_EXCEPTION`
+  y **divergía del servidor**. Corregido en `domain/orders.ts`.
+
+Es un buen recordatorio de por qué el archivo de dominio dice que si SQL
+y TS divergen, gana SQL.
+
 ## Productos y tratamiento tributario
 
 - `products`: datos del producto. **No** incluye ningún campo de
@@ -268,6 +379,56 @@ sellers de prueba). Resumen técnico:
   vigentes, en el momento exacto de `DRAFT → SUBMITTED`, y nunca vuelve
   a tocarlos después (la reevaluación tras una excepción resuelta usa
   `pedidos.reevaluate_order()`, que solo re-decide la bifurcación).
+
+## Notificación de pedidos (`0044`)
+
+### `orders.numero`
+
+Correlativo global legible, `bigint generated always as identity`. Se
+agregó porque `orders` solo se identificaba por uuid, y un uuid no sirve
+como referencia en el asunto de un correo ni para que Operaciones hable
+del pedido por teléfono.
+
+Dos detalles del `add column`:
+- `generated always as identity` **numera también las filas existentes**
+  al aplicar la migración, así que no hizo falta backfill aparte.
+- Es `always` y no `by default`: el número lo asigna la BD, nunca el
+  caller.
+
+Se asigna al **crear** el pedido, no al enviarlo — así el número es
+estable desde el borrador. Consecuencia aceptada: la numeración tiene
+huecos cuando un borrador se abandona.
+
+### `order_notification_recipients`
+
+`id`, `email`, `nombre_referencial`, `activo`, `fecha_creacion`.
+
+- Unique sobre `lower(email)`, no sobre `email`: el mismo buzón en
+  distinta capitalización mandaría el correo dos veces.
+- Índice parcial sobre `activo where activo` — la consulta del envío solo
+  busca activos.
+- Check de forma del email (`~ '^[^@ ]+@[^@ ]+\.[^@ ]+$'`) como red
+  mínima. La validación real la hace el proveedor al intentar entregar;
+  no se pretende validar RFC 5322 con un constraint.
+- RLS: policy `for all` solo para `administrador`. Sin lectura para otros
+  roles.
+
+### `notification_logs`
+
+`order_id`, `tipo`, `estado` (`enviado` / `fallido` / `sin_destinatarios`),
+`destinatarios text[]`, `proveedor`, `proveedor_message_id`,
+`error_mensaje`, `created_at`.
+
+`order_id` es `on delete set null`: si un pedido se borrara, el registro
+de que se intentó notificar sigue siendo información útil.
+
+RLS: `select` solo para `administrador`. **No hay policy de escritura**
+para `authenticated` — el servicio escribe con la service role key,
+porque si registrar un fallo de envío dependiera de una policy, el
+registro del fallo podría fallar.
+
+Ver `docs/architecture.md` para el proveedor de correo, las variables de
+entorno y por qué el correo nunca bloquea el envío del pedido.
 
 ## Auditoría
 

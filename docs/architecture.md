@@ -126,6 +126,70 @@ Cuando en fases posteriores existan tablas de pedidos, la expectativa
 es seguir el mismo patrón: capa de servicio como regla, trigger puntual
 solo donde la sensibilidad de la tabla lo justifique.
 
+## Notificación por correo al enviar un pedido
+
+Cuando un pedido pasa de `DRAFT` a `SUBMITTED`, se manda un correo con el
+detalle completo a todos los destinatarios activos de
+`pedidos.order_notification_recipients`. Reemplaza la idea previa de un
+PDF descargable dentro de la app.
+
+**Proveedor: Resend.** Elegido por encaje con Next.js sobre Vercel — no
+hay que abrir SMTP desde una función serverless — y porque enviar es un
+solo `POST`. Por eso `services/email.ts` llama a la API con `fetch`
+directo en vez de agregar el SDK: una dependencia menos para un endpoint
+que no va a cambiar.
+
+Variables de entorno (ver `.env.example`):
+
+- `RESEND_API_KEY` — key del proyecto en Resend. Solo servidor.
+- `RESEND_FROM_EMAIL` — remitente, sobre un dominio **verificado** en
+  Resend; sin verificar, Resend rechaza el envío.
+
+Si falta cualquiera de las dos, la app sigue funcionando: el intento
+queda como `fallido` en `notification_logs` y
+`/admin/configuracion/notificaciones` muestra un aviso. No hay
+`throw` en el arranque por una variable de correo ausente.
+
+### El correo nunca bloquea el pedido
+
+`notifyOrderSubmitted` (`services/order-notifications.ts`) **no lanza
+nunca**. Corre después del RPC `submit_order` y de la auditoría, cuando
+el pedido ya está guardado: un proveedor de correo caído no puede
+revertir un pedido válido ni mostrarle un error al vendedor por algo que
+no hizo mal. Hay un timeout de 10 s en el `fetch` para que un proveedor
+colgado no deje al vendedor esperando.
+
+Los tres desenlaces quedan en `pedidos.notification_logs` con estado
+`enviado` / `fallido` / `sin_destinatarios`, para poder reintentar a mano.
+El resultado también viaja en `SubmitOrderResult.notificacion`, pero **a
+propósito no se le muestra al vendedor**: es una notificación interna a
+Operaciones/Facturación, y que falle no es asunto suyo.
+
+### Por qué `notification_logs` y no solo `audit_logs`
+
+`audit_logs` registra acciones de negocio de un actor humano.
+`notification_logs` registra el resultado de un efecto externo que puede
+fallar sin que nadie se haya equivocado. Tenerlo aparte permite listar
+"qué correos fallaron" con un índice sobre `estado` en vez de filtrar
+texto dentro de un `jsonb`. El caso `sin_destinatarios` sí se registra
+además en `audit_logs`, porque ahí la causa es una decisión de
+configuración pendiente.
+
+### Contenido y RLS
+
+El armado del correo es puro y vive en `domain/order-email.ts` — HTML con
+estilos **en línea** (los clientes de correo ignoran `<style>` y no
+cargan Tailwind), colores de marca, y versión en texto plano para no
+quedar HTML-only. Todo dato de la BD pasa por `escapeHtml`.
+
+`order_notification_recipients` tiene policy solo para `administrador`,
+sin lectura para otros roles: quién recibe copia de los pedidos es
+configuración administrativa. El envío lee la lista con la service role
+key, porque quien dispara el correo es un vendedor. `notification_logs`
+es de solo lectura para `administrador`; la escritura va también por
+service role, porque si registrar un fallo dependiera de una policy, el
+registro del fallo podría fallar.
+
 ## Despliegue
 
 - Repo y proyecto de Vercel **separados** de `erp-logisalud`.
