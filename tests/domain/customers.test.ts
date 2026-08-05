@@ -44,6 +44,23 @@ describe("classifyDocumento", () => {
   it("ignora espacios alrededor del documento", () => {
     expect(classifyDocumento("  20100000001  ")).toBe("RUC_JURIDICA");
   });
+
+  // No alcanza con el prefijo: un RUC son 11 dígitos. Espejo del CHECK
+  // en 0041, que exige btrim(ruc) ~ '^(10|15|17|20)[0-9]{9}$'. Si TS
+  // fuera más permisivo, el importador grabaría FACTURA en filas que la
+  // BD rechaza.
+  it("exige 11 dígitos, no solo el prefijo", () => {
+    expect(classifyDocumento("20123")).toBe("DNI_COMO_RUC");
+    expect(classifyDocumento("2099999999")).toBe("DNI_COMO_RUC"); // 10 dígitos
+    expect(classifyDocumento("209999999999")).toBe("DNI_COMO_RUC"); // 12 dígitos
+    expect(classifyDocumento("20abcdefghi")).toBe("DNI_COMO_RUC");
+    expect(resolveTipoComprobantePermitido("20123")).toBe("BOLETA");
+  });
+
+  it("un DNI de 8 dígitos no es RUC", () => {
+    expect(classifyDocumento("12345678")).toBe("DNI_COMO_RUC");
+    expect(resolveEstadoInicialImportacion("12345678")).toBe("PENDIENTE_DE_VALIDACION");
+  });
 });
 
 describe("resolveTipoComprobantePermitido", () => {
