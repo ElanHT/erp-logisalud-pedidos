@@ -75,6 +75,12 @@ export function resolveOrderSellerFilter(input: {
  * comercial > listo para operaciones. Confirmado con el usuario: la
  * excepción administrativa se dispara cuando la condición de pago del
  * pedido difiere de la condición de pago habitual del cliente.
+ *
+ * Si el cliente NO tiene condición habitual definida
+ * (customerCondicionPagoHabitualId === null) no hay nada con qué
+ * comparar: cualquier condición que elija el vendedor se acepta sin
+ * excepción administrativa. Es el caso de la cartera real migrada, que
+ * entró sin ese dato a propósito (ver docs/business-rules.md).
  */
 export function computeAutomaticValidationOutcome(input: {
   customerEstado: CustomerEstado;
@@ -85,7 +91,10 @@ export function computeAutomaticValidationOutcome(input: {
   if (input.customerEstado === "PENDIENTE_DE_VALIDACION") {
     return "NEW_CUSTOMER_VALIDATION";
   }
-  if (input.orderPaymentTermsId !== input.customerCondicionPagoHabitualId) {
+  if (
+    input.customerCondicionPagoHabitualId !== null &&
+    input.orderPaymentTermsId !== input.customerCondicionPagoHabitualId
+  ) {
     return "ADMINISTRATIVE_EXCEPTION";
   }
   if (input.hasPendingApprovalRequest) {

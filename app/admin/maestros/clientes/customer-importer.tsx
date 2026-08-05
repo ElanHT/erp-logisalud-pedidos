@@ -4,9 +4,7 @@ import { useRef, useState, useTransition } from "react";
 import { previewImport, publishImport } from "./actions";
 import type { CustomerImportPreview, CustomerImportResult } from "@/services/customers-import";
 
-type PaymentTerm = { id: number; nombre: string };
-
-export function CustomerImporter({ paymentTerms }: { paymentTerms: PaymentTerm[] }) {
+export function CustomerImporter() {
   const formRef = useRef<HTMLFormElement>(null);
   const [isPending, startTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
@@ -85,27 +83,20 @@ export function CustomerImporter({ paymentTerms }: { paymentTerms: PaymentTerm[]
           </p>
         </div>
 
-        <div>
-          <label className="mb-1 block text-sm font-medium text-gray-700">
-            Condición de pago habitual <span className="text-red-600">*</span>
-          </label>
-          <select
-            name="condicionPagoHabitualId"
-            required
-            defaultValue={paymentTerms.length === 1 ? String(paymentTerms[0].id) : ""}
-            className="min-h-12 w-full rounded-lg border border-gray-300 px-3 py-2"
-          >
-            <option value="">Selecciona una condición de pago</option>
-            {paymentTerms.map((p) => (
-              <option key={p.id} value={p.id}>
-                {p.nombre}
-              </option>
-            ))}
-          </select>
-          <p className="mt-1 text-xs text-gray-500">
-            El archivo de origen no trae condición de pago. Se aplica esta a todos los clientes
-            cargados. Si queda vacía, todo pedido caería en excepción administrativa.
-          </p>
+        <div className="rounded-lg bg-gray-50 p-3 text-sm text-gray-700">
+          <p className="font-medium">Qué se asigna a todos los clientes de esta carga</p>
+          <ul className="mt-1 list-disc pl-5 text-xs text-gray-600">
+            <li>
+              <strong>Canal de venta: Horizontal.</strong> Supuesto temporal — el archivo de
+              origen no trae la clasificación, y sin canal no se puede calcular precio. Se
+              corrige cliente por cliente cuando llegue la clasificación real.
+            </li>
+            <li>
+              <strong>Condición de pago habitual: sin definir.</strong> El origen no trae el
+              dato y no se inventa uno. El vendedor elige la condición al armar cada pedido, y
+              eso no dispara excepción administrativa.
+            </li>
+          </ul>
         </div>
 
         <div className="flex flex-wrap gap-2">
@@ -217,6 +208,11 @@ function PreviewPanel({ preview }: { preview: CustomerImportPreview }) {
         direcciones.
       </p>
 
+      <p className="rounded-lg bg-gray-50 px-3 py-2 text-sm text-gray-700">
+        Todos entran con canal <strong>{preview.canalPorDefecto}</strong> y sin condición de pago
+        habitual.
+      </p>
+
       <IssueList title="Filas con error (se omiten)" issues={preview.errors} tone="error" />
       <IssueList title="Advertencias" issues={preview.warnings} tone="warn" />
     </div>
@@ -227,6 +223,10 @@ function ResultPanel({ result }: { result: CustomerImportResult }) {
   return (
     <div className="card-highlight flex flex-col gap-4 p-5">
       <h3 className="font-heading text-lg">Carga completada</h3>
+      <p className="text-sm text-gray-600">
+        Todos quedaron con canal <strong>{result.canalPorDefecto}</strong> y sin condición de pago
+        habitual.
+      </p>
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
         <Stat label="Clientes cargados" value={result.clientesCargados} />
         <Stat label="ACTIVO" value={result.activos} />

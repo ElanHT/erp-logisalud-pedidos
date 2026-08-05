@@ -28,6 +28,58 @@ describe("computeAutomaticValidationOutcome / calculateLineItem — feliz camino
   });
 });
 
+describe("computeAutomaticValidationOutcome — cliente sin condición de pago habitual", () => {
+  // La cartera real migrada entra con condicion_pago_habitual_id en null
+  // a propósito. Sin habitual no hay contra qué comparar, así que
+  // cualquier condición que elija el vendedor debe pasar sin excepción
+  // administrativa. Espejo de 0043 en SQL.
+  it("cualquier condición de pago se acepta sin excepción administrativa", () => {
+    for (const orderPaymentTermsId of [1, 2, 99]) {
+      expect(
+        computeAutomaticValidationOutcome({
+          customerEstado: "ACTIVO",
+          orderPaymentTermsId,
+          customerCondicionPagoHabitualId: null,
+          hasPendingApprovalRequest: false,
+        }),
+      ).toBe("READY_FOR_OPERATIONS");
+    }
+  });
+
+  it("sin habitual, una solicitud de descuento pendiente sigue mandando a excepción comercial", () => {
+    expect(
+      computeAutomaticValidationOutcome({
+        customerEstado: "ACTIVO",
+        orderPaymentTermsId: 3,
+        customerCondicionPagoHabitualId: null,
+        hasPendingApprovalRequest: true,
+      }),
+    ).toBe("COMMERCIAL_EXCEPTION");
+  });
+
+  it("sin habitual, un cliente pendiente de validación sigue teniendo precedencia", () => {
+    expect(
+      computeAutomaticValidationOutcome({
+        customerEstado: "PENDIENTE_DE_VALIDACION",
+        orderPaymentTermsId: 3,
+        customerCondicionPagoHabitualId: null,
+        hasPendingApprovalRequest: false,
+      }),
+    ).toBe("NEW_CUSTOMER_VALIDATION");
+  });
+
+  it("con habitual definida y distinta, sí dispara excepción administrativa", () => {
+    expect(
+      computeAutomaticValidationOutcome({
+        customerEstado: "ACTIVO",
+        orderPaymentTermsId: 2,
+        customerCondicionPagoHabitualId: 1,
+        hasPendingApprovalRequest: false,
+      }),
+    ).toBe("ADMINISTRATIVE_EXCEPTION");
+  });
+});
+
 describe("resolveOrderSellerId — pedido creado por administrador a nombre de un vendedor", () => {
   it("el administrador usa el seller elegido en el selector", () => {
     expect(

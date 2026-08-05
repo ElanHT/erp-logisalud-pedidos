@@ -15,6 +15,37 @@ import {
 /** Insert/upsert en tandas: 3.399 filas en una sola sentencia es innecesariamente frágil. */
 const BATCH_SIZE = 500;
 
+/**
+ * Canal de venta con el que entra la cartera migrada. Supuesto temporal
+ * explícito: el archivo de origen no trae clasificación de canal, y sin
+ * canal el pedido no se puede enviar — submit_order (0036) aborta con
+ * "El cliente no tiene canal de venta asignado; no se puede calcular
+ * precio", porque el precio se busca por canal en price_list_items. Es
+ * decir: sin este default la cartera entera quedaría inoperativa.
+ *
+ * La clasificación real (Mayorista/Horizontal/Minicadenas/Tops/Clínicas/
+ * Subdistribuidores) se corregirá cliente por cliente cuando el negocio
+ * la entregue. Ver docs/business-rules.md.
+ */
+const CANAL_POR_DEFECTO = "Horizontal";
+
+async function getCanalPorDefectoId(): Promise<number> {
+  const supabase = createClient();
+  const { data, error } = await supabase
+    .from("sales_channels")
+    .select("id")
+    .eq("nombre", CANAL_POR_DEFECTO)
+    .single();
+
+  if (error || !data) {
+    throw new Error(
+      `No se encontró el canal de venta "${CANAL_POR_DEFECTO}" en el catálogo` +
+        `${error ? `: ${error.message}` : "."}`,
+    );
+  }
+  return (data as { id: number }).id;
+}
+
 async function inBatches<T>(items: T[], fn: (batch: T[]) => Promise<void>): Promise<void> {
   for (let i = 0; i < items.length; i += BATCH_SIZE) {
     await fn(items.slice(i, i + BATCH_SIZE));
@@ -171,6 +202,8 @@ export type CustomerImportPreview = {
   snapshotFilas: number;
   /** Clientes que quedarían sin ninguna dirección de entrega registrada. */
   sinDireccion: number;
+  /** Canal que se asignará a todos (supuesto temporal). */
+  canalPorDefecto: string;
   errors: RowIssue[];
   warnings: RowIssue[];
   muestra: MappedCustomer[];
@@ -202,6 +235,10 @@ export async function previewCustomerImport(
 ): Promise<CustomerImportPreview> {
   const { totalFilas, mapped, snapshot, errors, warnings } = await parseAndMap(input);
   const supabase = createClient();
+
+  // Se resuelve en el preview (y no solo al publicar) para que el error
+  // salte antes de escribir nada si el catálogo de canales cambió.
+  await getCanalPorDefectoId();
 
   const rucs = mapped.customers.map((c) => c.rucODocumento);
   const existentes = new Set<string>();
@@ -243,6 +280,7 @@ export async function previewCustomerImport(
     reasignaciones: mapped.customers.filter((c) => c.reasignacion !== null).length,
     snapshotFilas: snapshot.rows.length,
     sinDireccion: mapped.customers.filter((c) => !conDireccion.has(c.rucODocumento)).length,
+    canalPorDefecto: CANAL_POR_DEFECTO,
     errors,
     warnings,
     muestra: mapped.customers.slice(0, 25),
@@ -250,6 +288,7 @@ export async function previewCustomerImport(
 }
 
 export type CustomerImportResult = {
+  canalPorDefecto: string;
   clientesCargados: number;
   activos: number;
   pendientesDeValidacion: number;
@@ -273,7 +312,6 @@ export type CustomerImportResult = {
  */
 export async function publishCustomerImport(
   input: CustomerImportInput,
-  condicionPagoHabitualId: number,
   actorUserId: string,
 ): Promise<CustomerImportResult> {
   const { mapped, snapshot, errors } = await parseAndMap(input);
@@ -281,10 +319,8 @@ export async function publishCustomerImport(
   if (mapped.customers.length === 0) {
     throw new Error("No se encontraron clientes válidos para cargar.");
   }
-  if (!condicionPagoHabitualId) {
-    throw new Error("Selecciona la condición de pago habitual con la que entran los clientes.");
-  }
 
+  const canalId = await getCanalPorDefectoId();
   const admin = createAdminClient();
 
   // --- Clientes -------------------------------------------------------
@@ -305,7 +341,12 @@ export async function publishCustomerImport(
           provincia: c.provincia,
           departamento: c.departamento,
           whatsapp: c.celular,
-          condicion_pago_habitual_id: condicionPagoHabitualId,
+          canal_id: canalId,
+          // Deliberadamente null: el archivo de origen no trae condición
+          // de pago, y no se inventa una por cliente. El vendedor elige
+          // la del pedido, y sin habitual definida eso no dispara
+          // excepción administrativa (ver 0043 y domain/orders.ts).
+          condicion_pago_habitual_id: null,
         })),
         { onConflict: "ruc_o_documento" },
       )
@@ -418,6 +459,7 @@ export async function publishCustomerImport(
   });
 
   const result: CustomerImportResult = {
+    canalPorDefecto: CANAL_POR_DEFECTO,
     clientesCargados: idByRuc.size,
     activos: mapped.customers.filter((c) => c.estado === "ACTIVO").length,
     pendientesDeValidacion: mapped.customers.filter(
@@ -434,7 +476,7 @@ export async function publishCustomerImport(
     actor: actorUserId,
     accion: "importar_cartera_clientes",
     entidad: "customers",
-    datosDespues: { ...result, condicionPagoHabitualId },
+    datosDespues: { ...result, canalId, condicionPagoHabitualId: null },
   });
 
   return result;

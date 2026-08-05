@@ -135,13 +135,48 @@ acumularse. Usa la service role key porque crea clientes en `ACTIVO`,
 algo que ninguna policy de RLS permite — queda registrado en
 `audit_logs` con el actor real (`importar_cartera_clientes`).
 
-El origen no trae condición de pago ni canal:
-- `condicion_pago_habitual_id` es un **parámetro explícito** del
-  importador (no un default inventado). Dejarlo en null haría que todo
-  pedido cayera en `ADMINISTRATIVE_EXCEPTION`, porque la bifurcación
-  compara la condición del pedido contra la habitual del cliente.
-- `canal_id` queda en **null**: no hay ningún dato en el CSV con el que
-  derivar uno de los 6 canales. Pendiente de completar.
+El origen no trae condición de pago ni canal, y cada caso se resolvió
+distinto porque las consecuencias de dejarlos en null son distintas:
+
+- **`condicion_pago_habitual_id` queda en `null`** para los 3.399. La
+  columna ya era nullable desde `0012`, así que no hizo falta ni cambio de
+  schema ni un valor centinela tipo `SIN_DEFINIR` — que además habría
+  contaminado el catálogo `payment_terms` con una fila que no es una
+  condición de pago real. El vendedor elige la condición al armar cada
+  pedido. Para que eso no dispare excepción administrativa, ver `0043`
+  más abajo.
+- **`canal_id` se asigna a `Horizontal`** para los 3.399, como supuesto
+  temporal explícito. Acá null no era opción: `submit_order` (`0036`)
+  aborta con "El cliente no tiene canal de venta asignado; no se puede
+  calcular precio", porque el precio se busca por canal en
+  `price_list_items`. Sin este default la cartera entera quedaría
+  inoperativa. Se corrige cliente por cliente cuando el negocio entregue
+  la clasificación real.
+
+### `0043` — condición habitual en null no es excepción administrativa
+
+La bifurcación automática dispara `ADMINISTRATIVE_EXCEPTION` cuando la
+condición del pedido difiere de la habitual del cliente. Con la habitual
+en null no hay nada que comparar, así que cualquier condición que elija
+el vendedor debe pasar.
+
+Ojo con la asimetría entre las dos implementaciones, que es la razón por
+la que esta migración existe:
+
+- En **SQL**, `payment_terms_id <> NULL` evalúa a `NULL`, y un `elsif`
+  trata `NULL` como falso — así que el comportamiento correcto ya
+  ocurría, pero **por accidente** de la lógica ternaria de Postgres, no
+  porque estuviera escrito. Cualquiera que envuelva la condición en un
+  `coalesce`, la niegue, o la mueva a un `CASE` la rompe sin notarlo.
+  `0043` reemplaza `submit_order` y `reevaluate_order` con la condición
+  explícita (`is not null and <>`). No cambia el comportamiento; lo hace
+  intencional.
+- En **TypeScript** sí estaba mal: `5 !== null` es `true`, así que
+  `computeAutomaticValidationOutcome` devolvía `ADMINISTRATIVE_EXCEPTION`
+  y **divergía del servidor**. Corregido en `domain/orders.ts`.
+
+Es un buen recordatorio de por qué el archivo de dominio dice que si SQL
+y TS divergen, gana SQL.
 
 ## Productos y tratamiento tributario
 

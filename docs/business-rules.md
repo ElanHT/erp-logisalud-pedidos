@@ -288,12 +288,56 @@ Cómo se hace cumplir, en dos niveles:
 
 Regla de dominio: `puedeTomarPedido` en `domain/customers.ts`.
 
+### Condición de pago: sin habitual definida
+
+Los 3.399 clientes migrados entran **sin condición de pago habitual**
+(`condicion_pago_habitual_id = null`). El archivo de origen no trae el
+dato y no se inventa uno por cliente: el vendedor elige la condición al
+armar cada pedido, igual que ya funciona para clientes nuevos.
+
+Consecuencia que hubo que resolver: la bifurcación automática manda a
+`ADMINISTRATIVE_EXCEPTION` cuando la condición del pedido difiere de la
+habitual del cliente. **Sin habitual definida no hay nada con qué
+comparar, así que cualquier condición que elija el vendedor se acepta sin
+excepción.** Implementado en `0043` (SQL, la autoridad) y en
+`computeAutomaticValidationOutcome` (`domain/orders.ts`, el espejo que
+alimenta la UI) — ver `docs/data-model.md` para por qué las dos
+implementaciones no coincidían antes de este cambio.
+
+El catálogo de condiciones de pago se completó en `0042`: además de
+`Contado`, ahora existen `Crédito 30 / 45 / 60 / 90 / 120 días`.
+
+**Pendiente:** asignar la condición habitual real cliente por cliente,
+cuando el negocio la defina. Mientras no exista, el flujo funciona — pero
+el sistema no puede detectar que un vendedor pidió una condición inusual
+para ese cliente, porque no sabe cuál es la usual.
+
+### Canal de venta: `Horizontal` como supuesto temporal
+
+Los 3.399 entran con **canal `Horizontal`**. Es un supuesto explícito, no
+un dato real: el archivo de origen no trae clasificación de canal.
+
+A diferencia de la condición de pago, acá dejarlo en null no era una
+opción: el precio se busca por canal en `price_list_items`, y
+`submit_order` aborta con "El cliente no tiene canal de venta asignado;
+no se puede calcular precio". Sin este default **ningún cliente de la
+cartera podría recibir un pedido**. Este supuesto es, en la práctica, lo
+que deja la cartera operativa.
+
+**Pendiente:** el negocio va a entregar la clasificación real
+(Mayorista / Horizontal / Minicadenas / Tops / Clínicas /
+Subdistribuidores) para corregir caso por caso. Hasta entonces, todo
+cliente migrado se cotiza a precio de canal Horizontal — si su canal real
+era otro, **el precio que ve el vendedor es el equivocado**. Vale
+priorizar esta corrección antes de operar a volumen.
+
 ### Qué queda pendiente de completar
 
 - **Dirección de entrega** de los clientes migrados — se completa en
   demanda, desde el propio flujo de pedido.
-- **`canal_id`**: queda en null. No hay dato en el origen con el que
-  derivar uno de los 6 canales de venta.
+- **Condición de pago habitual** — ver arriba.
+- **Canal de venta real** — ver arriba. Es el más urgente de los tres:
+  afecta el precio, no solo el flujo.
 - **`es_agente_retencion`**: queda en el default `false`. El origen no lo
   trae, y sigue atado a los supuestos de retenciones de Fase 6.
 

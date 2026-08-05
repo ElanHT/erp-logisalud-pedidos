@@ -40,16 +40,7 @@ export async function previewImport(formData: FormData): Promise<CustomerImportP
 
 export async function publishImport(formData: FormData): Promise<CustomerImportResult> {
   const userId = await requireUserId();
-  const condicionPagoHabitualId = Number(formData.get("condicionPagoHabitualId"));
-  if (!condicionPagoHabitualId) {
-    throw new Error("Selecciona la condición de pago habitual.");
-  }
-
-  const result = await publishCustomerImport(
-    await extractInput(formData),
-    condicionPagoHabitualId,
-    userId,
-  );
+  const result = await publishCustomerImport(await extractInput(formData), userId);
 
   revalidatePath("/admin/maestros/clientes");
   revalidatePath("/control-pedidos/validacion-clientes");

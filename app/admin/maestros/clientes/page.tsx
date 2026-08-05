@@ -1,13 +1,9 @@
-import { listCatalog } from "@/services/catalog";
 import { getCarteraSummary } from "@/services/customers-import";
 import { Breadcrumb } from "@/components/breadcrumb";
 import { CustomerImporter } from "./customer-importer";
 
 export default async function ClientesPage() {
-  const [paymentTerms, summary] = await Promise.all([
-    listCatalog("payment_terms"),
-    getCarteraSummary(),
-  ]);
+  const summary = await getCarteraSummary();
 
   return (
     <div className="flex flex-col gap-8">
@@ -56,7 +52,7 @@ export default async function ClientesPage() {
       <section>
         <h3 className="font-heading text-lg">Importar</h3>
         <div className="mt-3">
-          <CustomerImporter paymentTerms={paymentTerms.map((p) => ({ id: p.id, nombre: p.nombre }))} />
+          <CustomerImporter />
         </div>
       </section>
     </div>
