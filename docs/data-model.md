@@ -91,14 +91,51 @@ WhatsApp. El dato real obligó a extender el modelo de Fase 2:
 
 ### Constraint `customers_boleta_only_sin_ruc_valido`
 
-Un documento que no empieza en `10`/`15`/`17`/`20` no es RUC de
-contribuyente. El constraint obliga a `tipo_comprobante_permitido =
-'BOLETA'` en ese caso. Va como CHECK y no como validación de servicio a
-propósito: **tiene que sobrevivir a que Control de Pedidos apruebe al
-cliente**. Aprobar no habilita factura; lo único que la habilita es
-corregir `ruc_o_documento` a un RUC real, y ahí el constraint deja de
-aplicar por sí solo. Espejo en TS:
-`domain/customers.ts` (`resolveTipoComprobantePermitido`).
+Un documento que no es RUC de contribuyente obliga a
+`tipo_comprobante_permitido = 'BOLETA'`. Va como CHECK y no como
+validación de servicio a propósito: **tiene que sobrevivir a que Control
+de Pedidos apruebe al cliente**. Aprobar no habilita factura; lo único
+que la habilita es corregir `ruc_o_documento` a un RUC real, y ahí el
+constraint deja de aplicar por sí solo. Espejo en TS:
+`domain/customers.ts` (`esRucContribuyenteValido`).
+
+La condición es `btrim(ruc_o_documento) ~ '^(10|15|17|20)[0-9]{9}$'`.
+Dos detalles que importan:
+
+- **Exige el RUC completo, no solo el prefijo.** `'20123'` y
+  `'2099999999'` empiezan bien y no son RUC. Una versión anterior
+  chequeaba solo los dos primeros caracteres y los dejaba pasar como
+  FACTURA.
+- **`btrim`** para que un espacio accidental alrededor de un RUC legítimo
+  no lo degrade a BOLETA.
+
+El regex de TS (`RUC_CONTRIBUYENTE` en `domain/customers.ts`) es idéntico
+a propósito: si TS fuera más permisivo que SQL, el importador intentaría
+grabar `FACTURA` en filas que la BD rechaza.
+
+#### Por qué la migración normaliza los datos antes de crear el constraint
+
+Un CHECK se valida contra la tabla entera al crearse. Como
+`tipo_comprobante_permitido` tiene default `'FACTURA'`, **cualquier**
+cliente preexistente con documento no-RUC hace fallar el `ALTER` con
+`check constraint ... is violated by some row`. Y eso ocurre en cuanto
+existe un solo cliente creado desde el flujo de "cliente nuevo" de la
+app, que acepta cualquier string como documento — no hace falta ningún
+dato raro sembrado. La primera versión de `0041` no lo contemplaba y falló
+al aplicarse en producción.
+
+Por eso `0041` primero hace `update ... set tipo_comprobante_permitido =
+'BOLETA'` sobre las filas que no cumplen, y después agrega el constraint.
+Se eligió eso y **no** un `NOT VALID`: la regla de negocio dice que sin
+RUC válido el cliente va a BOLETA, así que aplicarla al dato viejo *es* la
+regla, no una excepción. Un `NOT VALID` dejaría filas permanentemente en
+contra de la regla y haría fallar cualquier `VALIDATE CONSTRAINT` futuro.
+La migración emite un `NOTICE` con cuántas filas corrigió.
+
+`0041` es re-ejecutable (`add column if not exists`, `create table if not
+exists`, `drop policy if exists` antes de cada `create policy`, y el
+constraint guardado por `pg_constraint`), porque un intento fallido y un
+reintento son el caso normal al aplicar a mano.
 
 ### Tablas nuevas
 
