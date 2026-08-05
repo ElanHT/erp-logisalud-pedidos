@@ -238,12 +238,15 @@ de tablas y el importador.
 El comprobante permitido se deriva del documento del cliente, no se
 elige a mano ni se deja en un default único:
 
-| Prefijo | Qué es | `tipo_comprobante_permitido` |
+| Documento | Qué es | `tipo_comprobante_permitido` |
 |---|---|---|
-| `20` | Persona jurídica | `FACTURA` |
-| `10` | Persona natural con negocio | `FACTURA_O_BOLETA` |
-| `15` / `17` | RUC de contribuyente residual, igualmente válido | `FACTURA_O_BOLETA` |
-| cualquier otro | **No es RUC** — DNI cargado en el campo de RUC | `BOLETA` |
+| `20` + 9 dígitos | Persona jurídica | `FACTURA` |
+| `10` + 9 dígitos | Persona natural con negocio | `FACTURA_O_BOLETA` |
+| `15` / `17` + 9 dígitos | RUC de contribuyente residual, igualmente válido | `FACTURA_O_BOLETA` |
+| cualquier otro | **No es RUC** — DNI en el campo de RUC, o RUC incompleto | `BOLETA` |
+
+Un RUC son **11 dígitos**, no solo un prefijo: `20123` y `2099999999`
+empiezan bien y no son RUC, así que van a `BOLETA`.
 
 `FACTURA_O_BOLETA` es deliberado para persona natural: el vendedor elige
 caso por caso al momento del pedido, no hay un default fijo por cliente.

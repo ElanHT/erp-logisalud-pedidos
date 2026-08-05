@@ -22,15 +22,22 @@ export function isCustomerOrderable(estado: CustomerEstado): boolean {
  */
 export type TipoDocumento = "RUC_JURIDICA" | "RUC_NATURAL" | "RUC_OTRO" | "DNI_COMO_RUC";
 
-const PREFIJOS_RUC_CONTRIBUYENTE = ["10", "15", "17", "20"];
+/**
+ * Un RUC de contribuyente es prefijo válido MÁS 11 dígitos en total. No
+ * alcanza con el prefijo: '20123' o '2099999999' empiezan bien y no son
+ * RUC. Idéntico al CHECK customers_boleta_only_sin_ruc_valido (0041) — si
+ * TS fuera más permisivo que SQL, el importador intentaría grabar
+ * FACTURA en filas que la BD rechaza.
+ */
+const RUC_CONTRIBUYENTE = /^(10|15|17|20)[0-9]{9}$/;
 
 export function classifyDocumento(rucODocumento: string): TipoDocumento {
   const doc = rucODocumento.trim();
+  if (!RUC_CONTRIBUYENTE.test(doc)) return "DNI_COMO_RUC";
   const prefijo = doc.slice(0, 2);
   if (prefijo === "20") return "RUC_JURIDICA";
   if (prefijo === "10") return "RUC_NATURAL";
-  if (PREFIJOS_RUC_CONTRIBUYENTE.includes(prefijo)) return "RUC_OTRO";
-  return "DNI_COMO_RUC";
+  return "RUC_OTRO";
 }
 
 /** Espejo en TS del constraint customers_boleta_only_sin_ruc_valido (0041). */
