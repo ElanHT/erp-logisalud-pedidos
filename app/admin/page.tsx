@@ -42,6 +42,16 @@ const SECTIONS = [
     description: "Aprobar o rechazar clientes nuevos solicitados por vendedores.",
   },
   {
+    href: "/admin/maestros/despacho",
+    title: "Despacho",
+    description: "Fuentes de stock, almacenes, vehículos, choferes y transportistas.",
+  },
+  {
+    href: "/operaciones",
+    title: "Despachos por preparar",
+    description: "Bandeja de Operaciones: preparar y despachar pedidos listos.",
+  },
+  {
     href: "/admin/configuracion/notificaciones",
     title: "Notificaciones de pedidos",
     description: "A qué correos se avisa cuando un vendedor envía un pedido.",

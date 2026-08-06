@@ -36,6 +36,12 @@ const HOME_SECTIONS: HomeSection[] = [
     roles: ["administrador"],
   },
   {
+    href: "/operaciones",
+    title: "Despachos",
+    description: "Preparar y despachar los pedidos listos para operaciones.",
+    roles: ["administrador", "operaciones"],
+  },
+  {
     href: "/control-pedidos/validacion-clientes",
     title: "Validación de clientes",
     description: "Aprobar o rechazar clientes nuevos solicitados por vendedores.",

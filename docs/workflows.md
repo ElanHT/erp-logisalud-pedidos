@@ -27,7 +27,8 @@ stateDiagram-v2
   COMMERCIAL_EXCEPTION --> DRAFT: aprobador_comercial rechaza
   COMMERCIAL_EXCEPTION --> READY_FOR_OPERATIONS: aprobador_comercial aprueba, sin más excepciones
   COMMERCIAL_EXCEPTION --> ADMINISTRATIVE_EXCEPTION: aprobador_comercial aprueba, pero condición de pago sigue distinta
-  READY_FOR_OPERATIONS --> [*]
+  READY_FOR_OPERATIONS --> DISPATCHED: operaciones confirma el despacho
+  DISPATCHED --> [*]
 ```
 
 `AUTOMATIC_VALIDATION` (el paso "bifurca" del PRD) **nunca se persiste como
@@ -54,6 +55,42 @@ transacción SQL, nunca algo que la UI llegue a mostrar.
 | `COMMERCIAL_EXCEPTION → DRAFT` | aprobador_comercial/admin | `RECHAZAR` | `order_status_history`, `approval_decisions` |
 | `COMMERCIAL_EXCEPTION → *` | aprobador_comercial/admin (vía `reevaluate_order`) | `APROBAR` / `APROBAR_OTRO_PRECIO` | `order_status_history`, `approval_decisions` |
 | (sin cambio) | aprobador_comercial/admin | `SOLICITAR_INFO` | `order_observations` |
+| `READY_FOR_OPERATIONS → DISPATCHED` | operaciones/admin (vía `confirm_dispatch`) | dirección de entrega activa, todas las líneas preparadas, lote/vencimiento capturados si el producto lo controla, motivo en toda diferencia de cantidad | `order_status_history`, `fulfillments`, `fulfillment_items`, `audit_logs` |
+
+## `DISPATCHED`: qué exige y por qué es terminal
+
+`pedidos.confirm_dispatch` (0046) hace todo en una sola transacción: valida,
+crea el `fulfillment` con sus líneas, y recién entonces mueve el pedido. Si
+una línea no cumple, no se crea el despacho ni se mueve el pedido — todo o
+nada.
+
+Lo que valida, en este orden:
+
+1. **Rol**: solo `operaciones` o `administrador`. La función es SECURITY
+   DEFINER y verifica el rol ella misma, así que la garantía se sostiene
+   incluso llamando el RPC directamente sin pasar por la app.
+2. **Estado**: solo desde `READY_FOR_OPERATIONS`. Esto es también lo que
+   impide el doble despacho (el segundo intento encuentra `DISPATCHED`), con
+   un índice único parcial en `fulfillments` como red de respaldo.
+3. **Dirección de entrega activa.** Desde Fase 4 un pedido no puede enviarse
+   sin dirección, así que todo lo que llegue acá ya debería tenerla; si un
+   pedido legacy se cuela, se bloquea con un mensaje que dice qué hacer.
+4. **Todas las líneas del pedido, exactamente una vez cada una.** No se
+   despacha "lo que se acordó" — se despacha el pedido completo, aunque una
+   línea vaya en cantidad 0.
+5. **Lote y vencimiento** si `products.controla_lote` /
+   `controla_vencimiento` lo exigen.
+6. **Motivo obligatorio** en toda diferencia entre cantidad pedida y
+   preparada. La diferencia queda en `fulfillment_items.motivo_diferencia` y
+   en `audit_logs`.
+
+`DISPATCHED` es terminal por ahora: no hay transición de salida hasta que
+exista anulación de despacho, que no está en alcance.
+
+**La fuente de stock la elige Operaciones acá, nunca el vendedor al tomar el
+pedido.** Por eso `inventory_source_id` vive en `fulfillments` y no en
+`orders`, y por eso el stock de fuentes distintas no se mezcla
+automáticamente.
 
 ## Por qué no hay un atajo directo excepción → READY_FOR_OPERATIONS
 
@@ -78,20 +115,25 @@ nunca vuelve a tocar precios — si lo hiciera, sobrescribiría un precio que un
 Ninguno de estos puntos está implementado en Fase 4 — quedan anclados al
 punto exacto donde deberían engancharse:
 
-- **Stock**: `READY_FOR_OPERATIONS` debería, antes de pasar a despacho,
-  verificar/reservar stock. Hoy no existe ninguna tabla de stock; un pedido
-  `READY_FOR_OPERATIONS` no implica que haya inventario disponible. Ver el
-  supuesto ya anotado en `docs/business-rules.md` ("pendiente de asignación de
-  stock" entre aprobación comercial y despacho).
+- **Stock real**: ya existe `stock_levels`, pero es un **registro manual**
+  que mantiene Operaciones — no hay integración en tiempo real con un ERP de
+  inventario, así que el número puede estar desfasado del almacén físico. Por
+  eso el despacho **no bloquea** por falta de stock: avisa, y la línea se
+  puede marcar como `pendiente_de_stock` con comentario. Cuando exista la
+  integración, el gancho natural es reemplazar la lectura de `stock_levels`
+  en `services/fulfillments.ts::getStockForOrder` y decidir ahí si pasa a ser
+  bloqueante.
 - **Promociones/bonificaciones**: `order_items`/`calculateLineItem` no
   contemplan escalas de precio ni bonificaciones — `products.codigo_bonificacion`
   ya se guarda desde Fase 2 para no perder el dato mientras tanto.
-- **GRE (guía de remisión electrónica)**: no hay ningún gancho para generarla;
-  llegaría después de `READY_FOR_OPERATIONS`, cuando Operaciones confirme
-  despacho.
-- **Factura/boleta**: `customers.tipo_comprobante_permitido` ya existe pero no
-  se usa todavía para emitir nada — la integración con NubeFact es de una fase
-  posterior.
-- **Despacho real**: no hay pantalla ni tabla para Operaciones más allá de que
-  la policy `orders_select`/`order_items_select` ya deja preparada la lectura
-  de pedidos `READY_FOR_OPERATIONS` para cuando exista esa pantalla.
+- **GRE (guía de remisión electrónica) y factura/boleta**: el gancho ya está
+  marcado con un TODO explícito al final de `pedidos.confirm_dispatch` (0046),
+  justo después de que el despacho quedó grabado y el pedido pasó a
+  `DISPATCHED`. Va después y no antes a propósito: un fallo del proveedor no
+  puede revertir un despacho físico ya hecho — mismo criterio que la
+  notificación por correo al enviar el pedido. `customers.tipo_comprobante_permitido`
+  ya decide cuál corresponde, y la emisión deberá quedar registrada con su
+  propio estado, reintentable.
+- **Anulación de despacho**: `DISPATCHED` es terminal. No hay forma de
+  revertir un despacho confirmado; cuando haga falta, es una transición nueva
+  con su propio permiso y su propio registro.

@@ -380,6 +380,84 @@ de identificador a mitad del flujo.
 **No es un número de comprobante fiscal.** Ese lo emite el proveedor de
 facturación electrónica al despachar, y no tiene por qué coincidir.
 
+## Stock y Operaciones
+
+### La fuente de stock la decide Operaciones, nunca el vendedor
+
+El stock de fuentes distintas (`central` vs. `regional`) **no se mezcla
+automáticamente**. La fuente se elige al confirmar el despacho, y por eso
+`inventory_source_id` vive en `fulfillments` y no en `orders`: cuando el
+vendedor toma el pedido todavía no se sabe —ni le corresponde decidir— de
+qué almacén va a salir.
+
+### El stock registrado es manual, y no bloquea el despacho
+
+`stock_levels` es un **registro que Operaciones mantiene a mano**. No hay
+integración en tiempo real con un ERP de inventario, así que el número
+puede estar desfasado del almacén físico.
+
+Consecuencia deliberada: **una línea sin stock registrado no bloquea el
+despacho.** La UI avisa cuando lo preparado supera lo disponible, y la
+línea se puede marcar como `pendiente_de_stock` con un comentario
+obligatorio. Bloquear contra un número que sabemos que puede estar mal
+frenaría despachos reales por un dato de mentira.
+
+**TODO — integración real de inventario:** cuando exista, el punto de
+enganche es `services/fulfillments.ts::getStockForOrder`, y ahí se decide
+si la validación pasa a ser bloqueante. Mientras no exista, el criterio
+es el de arriba.
+
+### Qué exige confirmar un despacho
+
+- Rol `operaciones` o `administrador`.
+- El pedido en `READY_FOR_OPERATIONS` (esto impide el doble despacho).
+- **Dirección de entrega activa.** Desde Fase 4 un pedido no puede
+  enviarse sin dirección, así que esto es una red para pedidos legacy: si
+  uno se cuela, se bloquea con un mensaje que dice qué hacer en vez de
+  despachar a ninguna parte.
+- **Todas** las líneas del pedido, una sola vez cada una — aunque alguna
+  vaya en cantidad 0.
+- **Lote** si el producto tiene `controla_lote`, y **fecha de
+  vencimiento** si tiene `controla_vencimiento`.
+- **Motivo obligatorio** en toda diferencia entre cantidad pedida y
+  preparada.
+- Transporte asignado: vehículo **con** chofer, o transportista externo.
+  Un vehículo sin chofer no es una asignación completa.
+
+Todo va en una sola transacción: si una línea no cumple, no se crea el
+despacho ni se mueve el pedido.
+
+### Qué ve el vendedor
+
+Solo lectura: que su pedido salió, cuándo, de qué fuente, con qué
+transporte, y qué se preparó de cada línea (con el motivo si hubo
+diferencia). No puede editar nada — no existe policy de escritura para él
+en `fulfillments` ni en `fulfillment_items`.
+
+### Auditoría
+
+Van a `audit_logs` con la acción `confirmar_despacho`: la fuente de stock
+elegida, el almacén y el transporte, toda diferencia entre cantidad
+pedida y preparada con su motivo, y las líneas marcadas como pendientes
+de stock con su comentario.
+
+### TODO — documentación electrónica (NubeFact)
+
+**No implementada.** El gancho está marcado con un TODO explícito al
+final de `pedidos.confirm_dispatch` (`0046`), justo después de que el
+despacho quedó grabado y el pedido pasó a `DISPATCHED`.
+
+Va después y no antes a propósito: un fallo del proveedor no puede
+revertir un despacho físico que ya ocurrió — el mismo criterio que la
+notificación por correo al enviar el pedido.
+`customers.tipo_comprobante_permitido` ya decide si corresponde factura o
+boleta, y la emisión deberá quedar registrada con su propio estado,
+reintentable, como `notification_logs`.
+
+Ojo con el recordatorio de arriba: los clientes sin RUC de contribuyente
+válido están restringidos a `BOLETA` por constraint, y eso sigue
+aplicando al emitir.
+
 ## Qué NO cubre esta fase
 
 Explícitamente fuera de alcance por ahora (ver README y CLAUDE.md):

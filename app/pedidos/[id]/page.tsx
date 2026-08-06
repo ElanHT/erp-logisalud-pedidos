@@ -1,5 +1,6 @@
 import { notFound } from "next/navigation";
 import { getOrderDetail } from "@/services/orders";
+import { getFulfillmentForOrder } from "@/services/fulfillments";
 import { listProducts } from "@/services/products";
 import { listCatalog } from "@/services/catalog";
 import { OrderItemComposer } from "./order-item-composer";
@@ -12,11 +13,16 @@ const ESTADO_LABELS: Record<string, string> = {
   ADMINISTRATIVE_EXCEPTION: "Excepción administrativa",
   COMMERCIAL_EXCEPTION: "Excepción comercial",
   READY_FOR_OPERATIONS: "Listo para operaciones",
+  DISPATCHED: "Despachado",
 };
 
 export default async function OrderDetailPage({ params }: { params: { id: string } }) {
   const order = await getOrderDetail(params.id);
   if (!order) notFound();
+
+  // Solo lectura para el vendedor: ve que su pedido salió y con qué, sin
+  // poder editar nada (no hay policy de escritura para él en fulfillments).
+  const fulfillment = order.estado === "DISPATCHED" ? await getFulfillmentForOrder(order.id) : null;
 
   const isDraft = order.estado === "DRAFT";
 
@@ -66,6 +72,41 @@ export default async function OrderDetailPage({ params }: { params: { id: string
               </div>
             ))}
           </div>
+        </div>
+      )}
+
+      {fulfillment && (
+        <div className="card-highlight p-4">
+          <h3 className="font-semibold text-logisalud-green">Despacho</h3>
+          <p className="mt-2 text-sm text-gray-600">
+            Despachado el{" "}
+            {fulfillment.fecha_despacho
+              ? new Date(fulfillment.fecha_despacho).toLocaleString("es-PE", {
+                  timeZone: "America/Lima",
+                })
+              : "—"}
+            {fulfillment.inventory_source && ` · ${fulfillment.inventory_source.nombre}`}
+          </p>
+          <p className="mt-1 text-sm text-gray-600">
+            Transporte:{" "}
+            {fulfillment.transporter?.nombre ??
+              [fulfillment.vehicle?.nombre, fulfillment.driver?.nombre].filter(Boolean).join(" · ") ??
+              "—"}
+          </p>
+          <ul className="mt-3 flex flex-col gap-1 text-sm">
+            {fulfillment.fulfillment_items.map((fi, idx) => {
+              const pedida = Number(fi.order_item?.cantidad ?? 0);
+              const preparada = Number(fi.cantidad_preparada);
+              return (
+                <li key={idx} className={preparada !== pedida ? "text-amber-800" : "text-gray-700"}>
+                  {fi.order_item?.product?.codigo_interno ?? "—"} · pedido {pedida} · despachado{" "}
+                  {preparada}
+                  {fi.motivo_diferencia && ` — ${fi.motivo_diferencia}`}
+                  {fi.pendiente_de_stock && " — pendiente de stock"}
+                </li>
+              );
+            })}
+          </ul>
         </div>
       )}
 
