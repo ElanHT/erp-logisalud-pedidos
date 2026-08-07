@@ -1,6 +1,7 @@
 import "server-only";
 import { createClient } from "@/lib/supabase/server";
 import { logAudit } from "./audit-log";
+import { generateElectronicDocumentDrafts } from "./electronic-documents";
 import { resumirDiferencias, type LineaPreparada } from "@/domain/fulfillment";
 
 export type OperationsQueueRow = {
@@ -276,6 +277,11 @@ export type ConfirmDispatchResult = {
     cantidadPreparada: number;
     motivo: string | null;
   }>;
+  /**
+   * Desenlace de la generación de borradores de documentación electrónica.
+   * Informativo: nunca bloquea el despacho.
+   */
+  borradores?: { ok: boolean; advertencias: string[]; error?: string };
 };
 
 /**
@@ -337,7 +343,21 @@ export async function confirmDispatch(
     },
   });
 
-  return { ...result, diferencias };
+  // Documentación electrónica: por ahora solo BORRADORES para revisión
+  // humana, no se llama a ningún servicio externo.
+  //
+  // TODO — Pendiente: reemplazar generación de borrador por llamada real a
+  // la API de NubeFact (POST a la ruta configurada con el token), una vez
+  // confirmada la estructura exacta de campos contra el manual oficial y
+  // rotado el token de forma segura (variables de entorno NUBEFACT_API_URL
+  // y NUBEFACT_API_TOKEN, nunca en el repo).
+  //
+  // Va DESPUÉS de que el despacho quedó grabado y el pedido pasó a
+  // DISPATCHED, y generateElectronicDocumentDrafts no lanza nunca: un fallo
+  // acá no puede revertir un despacho físico ya hecho.
+  const borradores = await generateElectronicDocumentDrafts(input.orderId, actor);
+
+  return { ...result, diferencias, borradores };
 }
 
 export type FulfillmentSummary = {

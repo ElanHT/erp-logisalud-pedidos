@@ -52,6 +52,11 @@ const SECTIONS = [
     description: "Bandeja de Operaciones: preparar y despachar pedidos listos.",
   },
   {
+    href: "/control-pedidos/documentos",
+    title: "Documentación electrónica",
+    description: "Borradores de factura/boleta y guía de remisión generados al despachar.",
+  },
+  {
     href: "/admin/configuracion/notificaciones",
     title: "Notificaciones de pedidos",
     description: "A qué correos se avisa cuando un vendedor envía un pedido.",

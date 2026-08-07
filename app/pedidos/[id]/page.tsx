@@ -1,6 +1,8 @@
 import { notFound } from "next/navigation";
 import { getOrderDetail } from "@/services/orders";
+import Link from "next/link";
 import { getFulfillmentForOrder } from "@/services/fulfillments";
+import { getCurrentUser } from "@/lib/auth/session";
 import { listProducts } from "@/services/products";
 import { listCatalog } from "@/services/catalog";
 import { OrderItemComposer } from "./order-item-composer";
@@ -23,6 +25,14 @@ export default async function OrderDetailPage({ params }: { params: { id: string
   // Solo lectura para el vendedor: ve que su pedido salió y con qué, sin
   // poder editar nada (no hay policy de escritura para él en fulfillments).
   const fulfillment = order.estado === "DISPATCHED" ? await getFulfillmentForOrder(order.id) : null;
+
+  // Los borradores de documentación electrónica los revisan administrador y
+  // control_pedidos; el vendedor no tiene nada que hacer con ellos.
+  const currentUser = await getCurrentUser();
+  const puedeVerBorradores =
+    order.estado === "DISPATCHED" &&
+    (currentUser?.roles.includes("administrador") ||
+      currentUser?.roles.includes("control_pedidos")) === true;
 
   const isDraft = order.estado === "DRAFT";
 
@@ -107,6 +117,22 @@ export default async function OrderDetailPage({ params }: { params: { id: string
               );
             })}
           </ul>
+        </div>
+      )}
+
+      {puedeVerBorradores && (
+        <div className="card p-4">
+          <h3 className="font-semibold text-logisalud-green">Documentación electrónica</h3>
+          <p className="mt-1 text-sm text-gray-600">
+            Borradores generados al despachar, para revisar contra el manual de la facturadora. No
+            se han enviado a ningún servicio.
+          </p>
+          <Link
+            href={`/control-pedidos/documentos/${order.id}`}
+            className="btn-secondary mt-3 inline-block text-sm"
+          >
+            Ver JSON de Factura/Boleta y Guía (borrador)
+          </Link>
         </div>
       )}
 

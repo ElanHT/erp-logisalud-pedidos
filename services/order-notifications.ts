@@ -3,6 +3,7 @@ import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { logAudit } from "./audit-log";
 import { sendEmail } from "./email";
+import { buildOrderExcel, buildOrderExcelFilename } from "./order-excel";
 import {
   buildOrderEmailSubject,
   renderOrderEmailHtml,
@@ -293,11 +294,27 @@ export async function notifyOrderSubmitted(
       return result;
     }
 
+    // El Excel es un adjunto: si falla generarlo, el correo sale igual con
+    // el detalle en el cuerpo. Perder el adjunto es peor que no avisar,
+    // pero mucho menos peor que no mandar nada.
+    let attachments: Array<{ filename: string; content: Buffer }> = [];
+    try {
+      attachments = [
+        { filename: buildOrderExcelFilename(data), content: await buildOrderExcel(data) },
+      ];
+    } catch (err) {
+      console.error(
+        "No se pudo generar el Excel del pedido; se envía el correo sin adjunto:",
+        err instanceof Error ? err.message : err,
+      );
+    }
+
     const sent = await sendEmail({
       to: destinatarios,
       subject: buildOrderEmailSubject(data),
       html: renderOrderEmailHtml(data),
       text: renderOrderEmailText(data),
+      attachments,
     });
 
     if (!sent.ok) {

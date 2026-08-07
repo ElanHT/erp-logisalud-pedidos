@@ -441,22 +441,81 @@ elegida, el almacén y el transporte, toda diferencia entre cantidad
 pedida y preparada con su motivo, y las líneas marcadas como pendientes
 de stock con su comentario.
 
-### TODO — documentación electrónica (NubeFact)
+## Documentación electrónica
 
-**No implementada.** El gancho está marcado con un TODO explícito al
-final de `pedidos.confirm_dispatch` (`0046`), justo después de que el
-despacho quedó grabado y el pedido pasó a `DISPATCHED`.
+### Estado: BORRADORES para revisión humana, sin integración
 
-Va después y no antes a propósito: un fallo del proveedor no puede
-revertir un despacho físico que ya ocurrió — el mismo criterio que la
-notificación por correo al enviar el pedido.
-`customers.tipo_comprobante_permitido` ya decide si corresponde factura o
-boleta, y la emisión deberá quedar registrada con su propio estado,
-reintentable, como `notification_logs`.
+**La app NO llama a la API de NubeFact.** Al confirmar el despacho genera
+dos JSON locales y los guarda en
+`pedidos.electronic_document_drafts`:
 
-Ojo con el recordatorio de arriba: los clientes sin RUC de contribuyente
-válido están restringidos a `BOLETA` por constraint, y eso sigue
-aplicando al emitir.
+1. **Comprobante** (factura o boleta), y
+2. **Guía de remisión (GRE)**.
+
+Ambos siguen la estructura *aproximada* documentada públicamente por
+NubeFact, y llevan un bloque `_borrador` con el aviso, las advertencias
+detectadas y la marca `quitar_este_bloque_antes_de_enviar`. Los nombres y
+códigos de campo están **sin confirmar** contra el manual oficial: el
+propósito de esta etapa es que la facturadora los compare campo por
+campo.
+
+Los revisan `administrador` y `control_pedidos`, en
+`/control-pedidos/documentos`. El vendedor no los ve.
+
+### TODO — Pendiente
+
+> Pendiente: reemplazar generación de borrador por llamada real a la API
+> de NubeFact (POST a la ruta configurada con el token), una vez
+> confirmada la estructura exacta de campos contra el manual oficial y
+> rotado el token de forma segura (variables de entorno
+> `NUBEFACT_API_URL` y `NUBEFACT_API_TOKEN`, nunca en el repo).
+
+El gancho está marcado con el mismo TODO en tres lugares:
+`pedidos.confirm_dispatch` (`0046`), `services/fulfillments.ts` (donde se
+llama a la generación) y `domain/nubefact-draft.ts`.
+
+Va **después** de que el despacho quedó grabado y el pedido pasó a
+`DISPATCHED`, y la generación **nunca lanza**: un fallo no puede revertir
+un despacho físico que ya ocurrió — el mismo criterio que la notificación
+por correo al enviar el pedido. Cuando exista la emisión real, deberá
+quedar registrada con su propio estado, reintentable, como
+`notification_logs`.
+
+### Huecos conocidos que el borrador reporta como advertencia
+
+Estos no son bugs del generador: son datos que el modelo todavía no tiene
+y que hay que resolver antes de emitir de verdad.
+
+- **`orders` no guarda qué comprobante eligió el vendedor.** Hoy nadie lo
+  elige al tomar el pedido. Si el cliente admite `FACTURA_O_BOLETA`, el
+  borrador asume **FACTURA** y lo marca como advertencia. Resolverlo pide
+  una decisión: o se agrega el selector al flujo de pedido, o la
+  facturadora lo define al emitir.
+- **Serie y número son placeholder.** La serie la autoriza SUNAT y el
+  correlativo fiscal lo lleva NubeFact; `orders.numero` es el número
+  interno del pedido y **no** el del comprobante.
+- **`peso_bruto_total` está incompleto.** La GRE lo exige, y
+  `products.peso_unitario_futuro` quedó sin cargar para casi todo el
+  catálogo. El borrador calcula con lo que hay y lista los productos sin
+  peso.
+- **El almacén no tiene dirección.** `warehouses` solo guarda nombre y
+  descripción, así que `direccion_de_partida` va vacía y advertida.
+
+Recordatorio que sigue aplicando: los clientes sin RUC de contribuyente
+válido están restringidos a `BOLETA` por constraint. Si el borrador
+resuelve factura para uno de ellos, lo advierte.
+
+### Excel adjunto en el correo del pedido
+
+El correo que sale al pasar a `SUBMITTED` lleva adjunto
+`pedido-[numero]-[fecha].xlsx` con el encabezado del pedido, la tabla de
+líneas y el total general. Se genera con `exceljs` (ya en el stack por el
+importador de listas de precios).
+
+Los importes **no se recalculan** para el Excel: se suman las líneas que
+grabó `submit_order`, igual que el cuerpo del correo, para que el adjunto
+no pueda contradecir a la BD. Si generar el Excel falla, **el correo sale
+igual sin adjunto** — perder el adjunto es malo, no avisar es peor.
 
 ## Qué NO cubre esta fase
 
