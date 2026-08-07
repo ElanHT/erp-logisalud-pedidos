@@ -467,6 +467,48 @@ registro del fallo podría fallar.
 Ver `docs/architecture.md` para el proveedor de correo, las variables de
 entorno y por qué el correo nunca bloquea el envío del pedido.
 
+## Empresa emisora (`0049`)
+
+### `company_settings` — singleton
+
+Datos legales de **quien emite** los comprobantes y las guías: razón
+social, RUC, dirección del domicilio fiscal, ubigeo, teléfono y email.
+
+No cambian por cliente ni por pedido, así que no tienen por qué vivir en
+cada documento: **alimentan los campos de EMISOR** del JSON de
+documentación electrónica. El destinatario sale de `customers`.
+
+Es un singleton de verdad: `id smallint primary key default 1 check (id =
+1)`. Eso impide que aparezca una segunda fila y que el código tenga que
+decidir "cuál de las dos es la buena".
+
+RLS: lectura para cualquier autenticado — son datos que van impresos en
+cada comprobante, no hay nada que ocultar, y la pantalla de
+administración los necesita. Escritura solo `administrador`, desde
+`/admin/configuracion/empresa`.
+
+El `ubigeo_codigo` del emisor se sembró como `150119` (Lurín) **por
+inferencia**: la dirección fiscal es la misma del Almacén Central Lima,
+cuyo ubigeo está confirmado. Es editable desde la pantalla si el
+domicilio fiscal difiere.
+
+### `warehouses.direccion` y `warehouses.ubigeo_codigo`
+
+`0045` creó `warehouses` con solo nombre y descripción, y el borrador de
+guía venía advirtiendo "el almacén no tiene dirección". `0049` agrega las
+dos columnas y carga el dato real confirmado del **Almacén Central
+Lima**:
+
+- `direccion`: `CAR. PANAMERICANA SUR KM.29.5 INT.A-08`
+- `ubigeo_codigo`: `150119` (Lima - Lima - Lurín)
+
+Los demás almacenes quedan en null **a propósito**: el borrador de guía
+los sigue advirtiendo hasta que se confirme su dato real, en vez de
+inventar una dirección.
+
+El ubigeo es el código INEI de 6 dígitos (departamento + provincia +
+distrito) y la guía lo exige como punto de partida.
+
 ## Auditoría
 
 Todo cambio en `customers` y en `product_tax_profiles` queda en

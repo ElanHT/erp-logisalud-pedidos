@@ -22,11 +22,17 @@ import { cleanEnv } from "@/lib/env";
 
 const RESEND_ENDPOINT = "https://api.resend.com/emails";
 
+export type EmailAttachment = {
+  filename: string;
+  content: Buffer;
+};
+
 export type SendEmailInput = {
   to: string[];
   subject: string;
   html: string;
   text: string;
+  attachments?: EmailAttachment[];
 };
 
 export type SendEmailResult =
@@ -66,6 +72,15 @@ export async function sendEmail(input: SendEmailInput): Promise<SendEmailResult>
         subject: input.subject,
         html: input.html,
         text: input.text,
+        // La API REST de Resend espera el adjunto en base64.
+        ...(input.attachments && input.attachments.length > 0
+          ? {
+              attachments: input.attachments.map((a) => ({
+                filename: a.filename,
+                content: a.content.toString("base64"),
+              })),
+            }
+          : {}),
       }),
       // Un proveedor colgado no debe dejar al vendedor esperando en la
       // pantalla de "enviar pedido". El pedido ya está guardado.
