@@ -57,6 +57,11 @@ const SECTIONS = [
     description: "Borradores de factura/boleta y guía de remisión generados al despachar.",
   },
   {
+    href: "/admin/configuracion/empresa",
+    title: "Datos de la empresa",
+    description: "Razón social, RUC y domicilio fiscal del emisor de comprobantes y guías.",
+  },
+  {
     href: "/admin/configuracion/notificaciones",
     title: "Notificaciones de pedidos",
     description: "A qué correos se avisa cuando un vendedor envía un pedido.",

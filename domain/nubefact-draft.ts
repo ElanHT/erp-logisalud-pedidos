@@ -65,6 +65,8 @@ export type DraftOrderData = {
     razonSocial: string;
     rucODocumento: string;
     direccion: string | null;
+    /** Ubigeo de la dirección de entrega (orders.ubigeo_snapshot). */
+    ubigeoCodigo: string | null;
   };
   vendedor: string | null;
   condicionPago: string | null;
@@ -72,14 +74,44 @@ export type DraftOrderData = {
   items: DraftItem[];
 };
 
+/** Datos legales del emisor, de pedidos.company_settings. */
+export type DraftEmisorData = {
+  razonSocial: string;
+  ruc: string;
+  direccion: string;
+  ubigeoCodigo: string | null;
+  telefono: string | null;
+  email: string | null;
+};
+
+/**
+ * Línea realmente despachada (de fulfillment_items). La GRE describe lo
+ * que SALIÓ del almacén, no lo que se pidió, y es de acá de donde salen el
+ * lote y el vencimiento capturados por Operaciones.
+ */
+export type DraftLineaDespachada = {
+  codigo: string;
+  descripcion: string;
+  unidadMedida: string;
+  cantidadPreparada: number;
+  lote: string | null;
+  fechaVencimiento: string | null;
+  pesoUnitario: number | null;
+};
+
 export type DraftFulfillmentData = {
   fuenteStock: string | null;
   almacen: string | null;
+  /** Dirección del almacén de salida (warehouses.direccion). */
   direccionPartida: string | null;
+  /** Ubigeo del almacén de salida (warehouses.ubigeo_codigo). */
+  ubigeoPartida: string | null;
   vehiculo: string | null;
   chofer: string | null;
   transportista: string | null;
   fechaDespacho: string | null;
+  /** Líneas realmente despachadas; si viene vacío se cae a las del pedido. */
+  lineasDespachadas: DraftLineaDespachada[];
 };
 
 function round2(n: number): number {
@@ -121,8 +153,53 @@ export function resolverTipoComprobante(permitido: TipoComprobantePermitido): {
 
 export type DraftResult<T> = { payload: T; advertencias: string[] };
 
+/** Bloque de emisor común a comprobante y guía. */
+function emisorPayload(emisor: DraftEmisorData) {
+  return {
+    ruc: emisor.ruc,
+    razon_social: emisor.razonSocial,
+    direccion: emisor.direccion,
+    ubigeo: emisor.ubigeoCodigo ?? "",
+    telefono: emisor.telefono ?? "",
+    email: emisor.email ?? "",
+  };
+}
+
+/** dd/mm/aaaa — el formato que usa la descripción de la guía. */
+export function formatFechaVencimiento(fecha: string): string {
+  const soloFecha = fecha.slice(0, 10);
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(soloFecha);
+  if (m) return `${m[3]}/${m[2]}/${m[1]}`;
+  return fecha;
+}
+
+/**
+ * Descripción del item en la guía. Formato tomado de una GRE real ya
+ * emitida: el lote y el vencimiento van CONCATENADOS en la descripción, no
+ * en campos aparte.
+ *
+ *   "VITACAPIL SHAMPOO CJA X 1 FCO X 380 ML LT: 2030056 FV: 31/03/2029"
+ *
+ * Si el producto no controla lote ni vencimiento, la descripción va sola,
+ * sin sufijo. Si solo hay uno de los dos, se agrega solo ese — no se
+ * inventa el que falta.
+ */
+export function descripcionConLoteYVencimiento(input: {
+  descripcion: string;
+  lote: string | null;
+  fechaVencimiento: string | null;
+}): string {
+  let out = input.descripcion.trim();
+  if (input.lote && input.lote.trim() !== "") out += ` LT: ${input.lote.trim()}`;
+  if (input.fechaVencimiento && input.fechaVencimiento.trim() !== "") {
+    out += ` FV: ${formatFechaVencimiento(input.fechaVencimiento.trim())}`;
+  }
+  return out;
+}
+
 export function buildComprobanteBorrador(
   data: DraftOrderData,
+  emisor: DraftEmisorData,
 ): DraftResult<Record<string, unknown>> {
   const advertencias: string[] = [];
   const { tipo, sinDefinir } = resolverTipoComprobante(data.tipoComprobantePermitido);
@@ -144,6 +221,12 @@ export function buildComprobanteBorrador(
   if (!data.cliente.direccion) {
     advertencias.push("El cliente no tiene dirección registrada en el comprobante.");
   }
+
+  advertencias.push(
+    "El bloque `emisor` sale de pedidos.company_settings. NubeFact normalmente toma al emisor " +
+      "de la configuración de la cuenta, así que este bloque puede sobrar en el payload real — " +
+      "confirmar contra el manual.",
+  );
 
   advertencias.push(
     `La serie "${SERIE_PLACEHOLDER[tipo]}" y el número ${data.numero} son PLACEHOLDER. ` +
@@ -169,6 +252,7 @@ export function buildComprobanteBorrador(
       quitar_este_bloque_antes_de_enviar: true,
     },
     operacion: "generar_comprobante",
+    emisor: emisorPayload(emisor),
     tipo_de_comprobante: TIPO_DE_COMPROBANTE[tipo],
     serie: SERIE_PLACEHOLDER[tipo],
     numero: data.numero,
@@ -218,6 +302,7 @@ const TIPO_TRANSPORTE = { PUBLICO: "01", PRIVADO: "02" } as const;
 export function buildGuiaRemisionBorrador(
   data: DraftOrderData,
   fulfillment: DraftFulfillmentData,
+  emisor: DraftEmisorData,
 ): DraftResult<Record<string, unknown>> {
   const advertencias: string[] = [
     AVISO_BORRADOR,
@@ -233,25 +318,65 @@ export function buildGuiaRemisionBorrador(
     );
   }
 
-  // El peso bruto es obligatorio en la GRE y hoy casi ningún producto tiene
-  // peso registrado (products.peso_unitario_futuro es nullable y quedó sin
-  // cargar). Se calcula con lo que hay y se avisa de lo que falta.
-  const sinPeso = data.items.filter((i) => i.pesoUnitario === null);
+  // La guía describe lo que SALIÓ del almacén. Si hay líneas despachadas
+  // (fulfillment_items), se usan esas — traen el lote y el vencimiento que
+  // capturó Operaciones. Si no, se cae a las del pedido y se avisa.
+  const usandoDespacho = fulfillment.lineasDespachadas.length > 0;
+  const lineas: DraftLineaDespachada[] = usandoDespacho
+    ? fulfillment.lineasDespachadas
+    : data.items.map((i) => ({
+        codigo: i.codigo,
+        descripcion: i.descripcion,
+        unidadMedida: i.unidadMedida,
+        cantidadPreparada: i.cantidad,
+        lote: null,
+        fechaVencimiento: null,
+        pesoUnitario: i.pesoUnitario,
+      }));
+
+  if (!usandoDespacho) {
+    advertencias.push(
+      "No se encontraron líneas de despacho (fulfillment_items); la guía se armó con las líneas " +
+        "del pedido, sin lote ni vencimiento. Verificar antes de emitir.",
+    );
+  }
+
+  // El peso bruto es obligatorio en la GRE. products.peso_unitario_futuro
+  // sigue sin cargar para buena parte del catálogo: se calcula con lo que
+  // hay y se avisa de lo que falta.
+  const sinPeso = lineas.filter((l) => l.pesoUnitario === null);
   const pesoBrutoTotal = round2(
-    data.items.reduce((s, i) => s + (i.pesoUnitario ?? 0) * i.cantidad, 0),
+    lineas.reduce((s, l) => s + (l.pesoUnitario ?? 0) * l.cantidadPreparada, 0),
   );
   if (sinPeso.length > 0) {
     advertencias.push(
-      `${sinPeso.length} de ${data.items.length} producto(s) no tienen peso unitario registrado ` +
-        `(${sinPeso.map((i) => i.codigo).join(", ")}), así que peso_bruto_total (${pesoBrutoTotal}) ` +
+      `${sinPeso.length} de ${lineas.length} producto(s) no tienen peso unitario registrado ` +
+        `(${sinPeso.map((l) => l.codigo).join(", ")}), así que peso_bruto_total (${pesoBrutoTotal}) ` +
         "está incompleto. SUNAT exige el peso bruto real en la guía.",
     );
   }
+
+  // Punto de partida: el almacén de salida. Resuelto para los almacenes con
+  // dirección y ubigeo cargados; advertido para los que no.
   if (!fulfillment.direccionPartida) {
-    advertencias.push("No hay dirección de partida registrada (el almacén no tiene dirección).");
+    advertencias.push(
+      `El almacén de salida${fulfillment.almacen ? ` (${fulfillment.almacen})` : ""} no tiene ` +
+        "dirección registrada; cargarla en Maestros → Despacho antes de emitir.",
+    );
+  }
+  if (!fulfillment.ubigeoPartida) {
+    advertencias.push(
+      `El almacén de salida${fulfillment.almacen ? ` (${fulfillment.almacen})` : ""} no tiene ` +
+        "ubigeo registrado; la guía lo exige como punto de partida.",
+    );
   }
   if (!data.cliente.direccion) {
     advertencias.push("El cliente no tiene dirección de llegada registrada.");
+  }
+  if (!data.cliente.ubigeoCodigo) {
+    advertencias.push(
+      "La dirección de entrega del cliente no tiene ubigeo; la guía lo exige como punto de llegada.",
+    );
   }
 
   const esRuc = esRucContribuyenteValido(data.cliente.rucODocumento);
@@ -265,6 +390,7 @@ export function buildGuiaRemisionBorrador(
       quitar_este_bloque_antes_de_enviar: true,
     },
     operacion: "generar_guia",
+    emisor: emisorPayload(emisor),
     tipo_de_comprobante: 7,
     serie: "T001",
     numero: data.numero,
@@ -276,15 +402,17 @@ export function buildGuiaRemisionBorrador(
     motivo_de_traslado: MOTIVO_TRASLADO_VENTA,
     peso_bruto_total: pesoBrutoTotal,
     peso_bruto_unidad_de_medida: "KGM",
-    numero_de_bultos: data.items.length,
+    numero_de_bultos: lineas.length,
     tipo_de_transporte: tipoTransporte,
     fecha_de_inicio_de_traslado: fechaISO(fulfillment.fechaDespacho ?? data.fechaEmision),
     transportista_documento_tipo: esPropio ? "" : TIPO_DE_DOCUMENTO_CLIENTE.RUC,
     transportista_denominacion: fulfillment.transportista ?? "",
     transportista_placa_numero: esPropio ? (fulfillment.vehiculo ?? "") : "",
     conductor_denominacion: esPropio ? (fulfillment.chofer ?? "") : "",
-    direccion_de_partida: fulfillment.direccionPartida ?? "",
-    direccion_de_llegada: data.cliente.direccion ?? "",
+    punto_de_partida_direccion: fulfillment.direccionPartida ?? "",
+    punto_de_partida_ubigeo: fulfillment.ubigeoPartida ?? "",
+    punto_de_llegada_direccion: data.cliente.direccion ?? "",
+    punto_de_llegada_ubigeo: data.cliente.ubigeoCodigo ?? "",
     // Referencia interna para cruzar con el despacho.
     observaciones: [
       `Pedido interno #${data.numero}`,
@@ -293,11 +421,17 @@ export function buildGuiaRemisionBorrador(
     ]
       .filter(Boolean)
       .join(" · "),
-    items: data.items.map((i) => ({
-      unidad_de_medida: i.unidadMedida,
-      codigo: i.codigo,
-      descripcion: i.descripcion,
-      cantidad: i.cantidad,
+    items: lineas.map((l) => ({
+      unidad_de_medida: l.unidadMedida,
+      codigo: l.codigo,
+      // Lote y vencimiento van CONCATENADOS acá, no en campos aparte —
+      // formato tomado de una GRE real ya emitida.
+      descripcion: descripcionConLoteYVencimiento({
+        descripcion: l.descripcion,
+        lote: l.lote,
+        fechaVencimiento: l.fechaVencimiento,
+      }),
+      cantidad: l.cantidadPreparada,
     })),
   };
 

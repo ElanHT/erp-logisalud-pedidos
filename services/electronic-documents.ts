@@ -10,6 +10,7 @@ import {
   type DraftItem,
   type DraftOrderData,
 } from "@/domain/nubefact-draft";
+import type { DraftEmisorData, DraftLineaDespachada } from "@/domain/nubefact-draft";
 import type { TipoComprobantePermitido } from "@/domain/customers";
 
 /**
@@ -36,6 +37,7 @@ type OrderRow = {
   created_at: string;
   razon_social_snapshot: string | null;
   direccion_snapshot: string | null;
+  ubigeo_snapshot: string | null;
   vendedor_snapshot: string | null;
   customer: { razon_social: string; ruc_o_documento: string; tipo_comprobante_permitido: string } | null;
   payment_terms: { nombre: string } | null;
@@ -61,10 +63,23 @@ type FulfillmentRow = {
   id: string;
   fecha_despacho: string | null;
   inventory_source: { nombre: string } | null;
-  warehouse: { nombre: string } | null;
+  warehouse: { nombre: string; direccion: string | null; ubigeo_codigo: string | null } | null;
   vehicle: { nombre: string } | null;
   driver: { nombre: string } | null;
   transporter: { nombre: string } | null;
+  fulfillment_items: Array<{
+    cantidad_preparada: number | string;
+    lote: string | null;
+    fecha_vencimiento: string | null;
+    order_item: {
+      product: {
+        codigo_interno: string;
+        descripcion: string;
+        unidad_medida: string;
+        peso_unitario_futuro: number | string | null;
+      } | null;
+    } | null;
+  }> | null;
 };
 
 /**
@@ -84,7 +99,7 @@ export async function generateElectronicDocumentDrafts(
       admin
         .from("orders")
         .select(
-          `numero, fecha_envio, created_at, razon_social_snapshot, direccion_snapshot, vendedor_snapshot,
+          `numero, fecha_envio, created_at, razon_social_snapshot, direccion_snapshot, ubigeo_snapshot, vendedor_snapshot,
            customer:customers(razon_social, ruc_o_documento, tipo_comprobante_permitido),
            payment_terms:payment_terms(nombre)`,
         )
@@ -102,16 +117,51 @@ export async function generateElectronicDocumentDrafts(
         .select(
           `id, fecha_despacho,
            inventory_source:inventory_sources(nombre),
-           warehouse:warehouses(nombre),
+           warehouse:warehouses(nombre, direccion, ubigeo_codigo),
            vehicle:vehicles(nombre),
            driver:drivers(nombre),
-           transporter:transporters(nombre)`,
+           transporter:transporters(nombre),
+           fulfillment_items(
+             cantidad_preparada, lote, fecha_vencimiento,
+             order_item:order_items(
+               product:products(codigo_interno, descripcion, unidad_medida, peso_unitario_futuro)
+             )
+           )`,
         )
         .eq("order_id", orderId)
         .order("fecha_preparacion", { ascending: false })
         .limit(1)
         .maybeSingle(),
     ]);
+
+    const { data: companyRow, error: companyError } = await admin
+      .from("company_settings")
+      .select("razon_social, ruc, direccion, ubigeo_codigo, telefono, email")
+      .eq("id", 1)
+      .maybeSingle();
+    if (companyError) throw new Error(companyError.message);
+    if (!companyRow) {
+      throw new Error(
+        "No hay datos de empresa emisora configurados (pedidos.company_settings). " +
+          "Cargarlos en /admin/configuracion/empresa.",
+      );
+    }
+    const company = companyRow as unknown as {
+      razon_social: string;
+      ruc: string;
+      direccion: string;
+      ubigeo_codigo: string | null;
+      telefono: string | null;
+      email: string | null;
+    };
+    const emisor: DraftEmisorData = {
+      razonSocial: company.razon_social,
+      ruc: company.ruc,
+      direccion: company.direccion,
+      ubigeoCodigo: company.ubigeo_codigo,
+      telefono: company.telefono,
+      email: company.email,
+    };
 
     if (orderResult.error) throw new Error(orderResult.error.message);
     if (itemsResult.error) throw new Error(itemsResult.error.message);
@@ -145,6 +195,7 @@ export async function generateElectronicDocumentDrafts(
         razonSocial: order.razon_social_snapshot ?? order.customer?.razon_social ?? "—",
         rucODocumento: order.customer?.ruc_o_documento ?? "",
         direccion: order.direccion_snapshot,
+        ubigeoCodigo: order.ubigeo_snapshot,
       },
       vendedor: order.vendedor_snapshot,
       condicionPago: order.payment_terms?.nombre ?? null,
@@ -153,20 +204,39 @@ export async function generateElectronicDocumentDrafts(
       items,
     };
 
+    // Las líneas realmente despachadas: de acá salen el lote y el
+    // vencimiento que capturó Operaciones, que la guía concatena en la
+    // descripción.
+    const lineasDespachadas: DraftLineaDespachada[] = (fulfillment?.fulfillment_items ?? []).map(
+      (fi) => ({
+        codigo: fi.order_item?.product?.codigo_interno ?? "—",
+        descripcion: fi.order_item?.product?.descripcion ?? "—",
+        unidadMedida: fi.order_item?.product?.unidad_medida ?? "UND",
+        cantidadPreparada: num(fi.cantidad_preparada),
+        lote: fi.lote,
+        fechaVencimiento: fi.fecha_vencimiento,
+        pesoUnitario:
+          fi.order_item?.product?.peso_unitario_futuro === null ||
+          fi.order_item?.product?.peso_unitario_futuro === undefined
+            ? null
+            : num(fi.order_item.product.peso_unitario_futuro),
+      }),
+    );
+
     const fulfillmentData: DraftFulfillmentData = {
       fuenteStock: fulfillment?.inventory_source?.nombre ?? null,
       almacen: fulfillment?.warehouse?.nombre ?? null,
-      // warehouses no guarda dirección todavía; el borrador lo reporta como
-      // advertencia en vez de inventar una dirección de partida.
-      direccionPartida: null,
+      direccionPartida: fulfillment?.warehouse?.direccion ?? null,
+      ubigeoPartida: fulfillment?.warehouse?.ubigeo_codigo ?? null,
       vehiculo: fulfillment?.vehicle?.nombre ?? null,
       chofer: fulfillment?.driver?.nombre ?? null,
       transportista: fulfillment?.transporter?.nombre ?? null,
       fechaDespacho: fulfillment?.fecha_despacho ?? null,
+      lineasDespachadas: lineasDespachadas,
     };
 
-    const comprobante = buildComprobanteBorrador(data);
-    const guia = buildGuiaRemisionBorrador(data, fulfillmentData);
+    const comprobante = buildComprobanteBorrador(data, emisor);
+    const guia = buildGuiaRemisionBorrador(data, fulfillmentData, emisor);
     const { tipo } = resolverTipoComprobante(data.tipoComprobantePermitido);
 
     // Se reemplaza el borrador anterior del mismo pedido y tipo: si se

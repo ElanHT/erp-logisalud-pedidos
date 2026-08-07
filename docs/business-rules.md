@@ -462,6 +462,36 @@ campo.
 Los revisan `administrador` y `control_pedidos`, en
 `/control-pedidos/documentos`. El vendedor no los ve.
 
+### Quién es el emisor
+
+Los datos legales del emisor **no están hardcodeados** en el generador:
+salen del singleton `pedidos.company_settings` (una sola fila, `id = 1`),
+editable solo por `administrador` en `/admin/configuracion/empresa`. Ahí
+viven razón social, RUC, domicilio fiscal, ubigeo, teléfono y email, y
+alimentan el bloque de emisor de **ambos** documentos.
+
+Si la fila no existe, la generación de borradores falla en voz alta en vez
+de emitir un documento sin emisor. El destinatario, en cambio, sale
+siempre del cliente del pedido.
+
+### Descripción de los items de la GRE
+
+La GRE describe cada producto con el mismo formato que la facturadora usa
+hoy a mano:
+
+```
+<nombre del producto> LT: <lote> FV: DD/MM/AAAA
+```
+
+Ejemplo real: `VITACAPIL SHAMPOO CJA X 1 FCO X 380 ML LT: 2030056 FV:
+31/03/2029`.
+
+El lote y el vencimiento los captura Operaciones por línea al confirmar el
+despacho, así que la descripción se arma con lo **efectivamente
+despachado**, no con lo pedido — y las cantidades de la GRE son las
+`cantidad_preparada`, no las pedidas. Si una línea va sin lote o sin
+vencimiento, se omite ese fragmento en vez de escribir `LT: null`.
+
 ### TODO — Pendiente
 
 > Pendiente: reemplazar generación de borrador por llamada real a la API
@@ -498,8 +528,17 @@ y que hay que resolver antes de emitir de verdad.
   `products.peso_unitario_futuro` quedó sin cargar para casi todo el
   catálogo. El borrador calcula con lo que hay y lista los productos sin
   peso.
-- **El almacén no tiene dirección.** `warehouses` solo guarda nombre y
-  descripción, así que `direccion_de_partida` va vacía y advertida.
+- **Solo un almacén tiene dirección cargada.** `warehouses.direccion` y
+  `warehouses.ubigeo_codigo` existen desde `0049`, y **Almacén Central
+  Lima** ya los tiene (`CAR. PANAMERICANA SUR KM.29.5 INT.A-08`, ubigeo
+  `150119`): un pedido que sale de ahí genera la GRE con
+  `punto_de_partida_direccion` y `punto_de_partida_ubigeo` resueltos y
+  **sin advertencia**. Los demás almacenes siguen en `null` a propósito —
+  nadie confirmó su dirección real — y el borrador los advierte hasta que
+  se completen desde `/admin/maestros/despacho` o la BD.
+- **El ubigeo de llegada depende del cliente.** Sale de
+  `orders.ubigeo_snapshot`; si el cliente se cargó sin ubigeo, el
+  borrador advierte `punto_de_llegada_ubigeo` vacío.
 
 Recordatorio que sigue aplicando: los clientes sin RUC de contribuyente
 válido están restringidos a `BOLETA` por constraint. Si el borrador

@@ -46,6 +46,11 @@ export default async function DespachoMaestrosPage() {
 
       <section>
         <h3 className="font-heading text-lg">Almacenes</h3>
+        <p className="mt-1 text-sm text-gray-600">
+          La guía de remisión exige dirección y ubigeo del almacén de salida como punto de partida.
+          El Almacén Central Lima ya los tiene cargados; para los demás, por ahora se completan
+          desde la base de datos y el borrador de guía los reporta como advertencia mientras falten.
+        </p>
         <div className="mt-3">
           <CatalogList items={warehouses} onCreate={crearAlmacen} onToggle={cambiarEstadoAlmacen} />
         </div>
