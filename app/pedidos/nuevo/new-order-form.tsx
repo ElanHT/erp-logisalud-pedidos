@@ -1,25 +1,41 @@
 "use client";
 
-import { useMemo, useState, useTransition } from "react";
+import { useEffect, useRef, useState, useTransition } from "react";
 import { MENSAJE_SIN_DIRECCION } from "@/domain/customers";
 import {
+  INITIAL_CUSTOMER_LIMIT,
+  MIN_SEARCH_LENGTH,
+  displayRazonSocial,
+  esTerminoBuscable,
+} from "@/domain/customer-search";
+import {
   agregarDireccionCliente,
+  buscarClientes,
   crearBorrador,
   crearClienteNuevo,
   getAddressesForCustomer,
 } from "./actions";
 
 type Seller = { id: string; codigo_representante: string; nombre_completo: string; zone: { nombre: string } | null };
-type Customer = { id: string; razon_social: string; ruc_o_documento: string };
+type Customer = {
+  id: string;
+  razon_social: string;
+  nombre_comercial?: string | null;
+  ruc_o_documento: string;
+};
 type PaymentTerm = { id: number; nombre: string };
 type CatalogOption = { id: number; nombre: string };
 type Address = { id: string; direccion: string; es_principal: boolean };
 
-function normalize(s: string) {
-  return s
-    .toLowerCase()
-    .normalize("NFD")
-    .replace(/[̀-ͯ]/g, "");
+/** Espera antes de consultar, para no lanzar una query por tecla. */
+const SEARCH_DEBOUNCE_MS = 300;
+
+/** Etiqueta de una opción: nombre limpio + RUC, que es como lo buscan. */
+function customerLabel(c: Customer): string {
+  const nombre = displayRazonSocial(c.razon_social);
+  const comercial = c.nombre_comercial?.trim();
+  const alias = comercial && comercial.toUpperCase() !== nombre.toUpperCase() ? ` — ${comercial}` : "";
+  return `${nombre}${alias} (${c.ruc_o_documento})`;
 }
 
 export function NewOrderForm({
@@ -41,7 +57,12 @@ export function NewOrderForm({
   const [error, setError] = useState<string | null>(null);
   const [customers, setCustomers] = useState(initialCustomers);
   const [customerQuery, setCustomerQuery] = useState("");
+  const [searching, setSearching] = useState(false);
+  const [searchError, setSearchError] = useState<string | null>(null);
+  // Contra respuestas fuera de orden: solo la búsqueda más reciente pinta.
+  const searchToken = useRef(0);
   const [selectedCustomerId, setSelectedCustomerId] = useState("");
+  const [selectedCustomer, setSelectedCustomer] = useState<Customer | null>(null);
   const [addresses, setAddresses] = useState<Address[]>([]);
   const [selectedAddressId, setSelectedAddressId] = useState("");
   const [loadingAddresses, setLoadingAddresses] = useState(false);
@@ -66,11 +87,49 @@ export function NewOrderForm({
   // bloqueado hasta registrar una.
   const sinDireccion = !!selectedCustomerId && !loadingAddresses && addresses.length === 0;
 
-  const filteredCustomers = useMemo(() => {
-    if (!customerQuery.trim()) return customers.slice(0, 20);
-    const q = normalize(customerQuery);
-    return customers.filter((c) => normalize(c.razon_social).includes(q) || normalize(c.ruc_o_documento).includes(q)).slice(0, 20);
-  }, [customers, customerQuery]);
+  // Búsqueda en el SERVIDOR con debounce. No se filtra sobre una lista
+  // precargada: son 3.4k clientes, PostgREST corta en 1.000 filas y el
+  // resto quedaba invisible para el buscador (era el bug reportado).
+  useEffect(() => {
+    if (!esTerminoBuscable(customerQuery)) {
+      // Volver al estado inicial: la primera página que trajo el servidor.
+      setCustomers(initialCustomers);
+      setSearching(false);
+      setSearchError(null);
+      return;
+    }
+
+    setSearching(true);
+    setSearchError(null);
+    const term = customerQuery;
+    const timer = setTimeout(async () => {
+      // Descarta respuestas de un término que el vendedor ya cambió.
+      const token = ++searchToken.current;
+      try {
+        const results = await buscarClientes(term);
+        if (token !== searchToken.current) return;
+        setCustomers(results);
+      } catch (err) {
+        if (token !== searchToken.current) return;
+        setSearchError(err instanceof Error ? err.message : "No se pudo buscar.");
+        setCustomers([]);
+      } finally {
+        if (token === searchToken.current) setSearching(false);
+      }
+    }, SEARCH_DEBOUNCE_MS);
+
+    return () => clearTimeout(timer);
+  }, [customerQuery, initialCustomers]);
+
+  const buscando = esTerminoBuscable(customerQuery);
+
+  // El cliente elegido tiene que seguir listado aunque la búsqueda cambie
+  // debajo, o el <select> se queda con un value sin <option> y aparece
+  // vacío — pasaba al limpiar el buscador tras elegir.
+  const customerOptions =
+    selectedCustomer && !customers.some((c) => c.id === selectedCustomer.id)
+      ? [selectedCustomer, ...customers]
+      : customers;
 
   function handleAddAddress() {
     setNewAddressError(null);
@@ -92,6 +151,9 @@ export function NewOrderForm({
 
   function handleSelectCustomer(customerId: string) {
     setSelectedCustomerId(customerId);
+    setSelectedCustomer(
+      customerId ? (customers.find((c) => c.id === customerId) ?? selectedCustomer ?? null) : null,
+    );
     setAddresses([]);
     setSelectedAddressId("");
     setNewAddressError(null);
@@ -121,7 +183,7 @@ export function NewOrderForm({
           condicionPagoHabitualId: Number(newCustomer.condicionPagoHabitualId),
           direccion: newCustomer.direccion,
         });
-        setCustomers((prev) => [...prev, customer]);
+        setSelectedCustomer(customer);
         setSelectedCustomerId(customer.id);
         setAddresses([{ id: addressId, direccion: newCustomer.direccion, es_principal: true }]);
         setSelectedAddressId(addressId);
@@ -250,10 +312,12 @@ export function NewOrderForm({
         ) : (
           <>
             <input
-              type="text"
+              type="search"
+              inputMode="search"
+              autoComplete="off"
               value={customerQuery}
               onChange={(e) => setCustomerQuery(e.target.value)}
-              placeholder="Buscar por razón social o RUC..."
+              placeholder="Buscar por RUC, razón social o nombre comercial..."
               className="mb-2 min-h-12 w-full rounded-lg border border-gray-300 px-3 py-2"
             />
             <select
@@ -263,15 +327,37 @@ export function NewOrderForm({
               onChange={(e) => handleSelectCustomer(e.target.value)}
               className="min-h-12 w-full rounded-lg border border-gray-300 px-3 py-2"
             >
-              <option value="">Selecciona un cliente</option>
-              {filteredCustomers.map((c) => (
+              <option value="">
+                {searching ? "Buscando..." : "Selecciona un cliente"}
+              </option>
+              {customerOptions.map((c) => (
                 <option key={c.id} value={c.id}>
-                  {c.razon_social} ({c.ruc_o_documento})
+                  {customerLabel(c)}
                 </option>
               ))}
             </select>
-            {customers.length === 0 && (
+
+            {searchError ? (
+              <p className="mt-1 text-sm text-red-700">{searchError}</p>
+            ) : searching ? (
+              <p className="mt-1 text-sm text-gray-500">Buscando en toda la cartera...</p>
+            ) : buscando ? (
+              <p className="mt-1 text-sm text-gray-500">
+                {customers.length === 0
+                  ? `Ningún cliente activo coincide con "${customerQuery.trim()}" en tu cartera.`
+                  : `${customers.length} coincidencia${customers.length === 1 ? "" : "s"}.`}
+              </p>
+            ) : customers.length === 0 ? (
               <p className="mt-1 text-sm text-gray-500">No hay clientes activos visibles para tu zona.</p>
+            ) : (
+              // Importa decirlo: la lista cerrada NO es la cartera completa,
+              // es la primera página. Sin este aviso el vendedor cree que
+              // el cliente que no ve no existe.
+              <p className="mt-1 text-sm text-gray-500">
+                Primeros {Math.min(customers.length, INITIAL_CUSTOMER_LIMIT)} clientes en orden
+                alfabético. Escribe {MIN_SEARCH_LENGTH} caracteres o más para buscar en toda tu
+                cartera.
+              </p>
             )}
           </>
         )}

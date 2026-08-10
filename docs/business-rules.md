@@ -344,6 +344,52 @@ priorizar esta corrección antes de operar a volumen.
 - **`es_agente_retencion`**: queda en el default `false`. El origen no lo
   trae, y sigue atado a los supuestos de retenciones de Fase 6.
 
+### Asteriscos en la razón social
+
+21 de los 3.399 clientes migrados traen la razón social con asteriscos
+escritos al inicio, en cantidad variable y a veces con barras:
+`'* BOTICA ...'`, `'**** ... S.C.R.L.'`, `'*****///INVERSIONES ...'`.
+
+**No son un indicador del sistema**: no hay código que los genere — ni
+score de relevancia, ni marca de debug. Venían así en el CSV del piloto de
+WhatsApp, alguien los tipeó a mano allá y el importador los cargó
+literales. Como `*` ordena antes que las letras, coparon la cabeza de
+cualquier lista ordenada por nombre.
+
+El selector de pedido los **limpia solo para mostrar**
+(`displayRazonSocial` en `domain/customer-search.ts`); el dato original
+queda intacto en `customers.razon_social`, y la búsqueda encuentra el
+cliente igual escribiendo el nombre sin los asteriscos.
+
+**Pendiente de decidir:** si en el piloto significaban algo (¿cliente
+preferente? ¿moroso? ¿prioridad de visita?) hay que modelarlo en una
+columna propia. Si no significaban nada, corresponde una migración que
+normalice los 21 nombres. Hasta que alguien lo confirme, no se toca el
+dato.
+
+### Búsqueda de clientes en el flujo de pedido
+
+La cartera son ~3.400 clientes, así que el selector **busca en el
+servidor** (`searchActiveCustomers`), con debounce de 300 ms, coincidencia
+`ilike '%término%'` sobre RUC/documento, razón social y nombre comercial, y
+tope de 50 resultados. La lista que se ve sin escribir nada es solo la
+primera página de 50, y la UI lo dice.
+
+No se precarga la cartera en el navegador para filtrar ahí: **PostgREST
+tope las respuestas en 1.000 filas**, así que hacerlo dejaba 2.248 clientes
+(69% de la cartera) invisibles para el buscador sin ningún error a la
+vista. Es el mismo tope que ya obligó a paginar el resumen de la cartera en
+`services/customers-import.ts`.
+
+La consulta corre con el cliente Supabase **del usuario**, nunca el de
+service role, así que la RLS de `customers_select` aplica igual: un
+vendedor solo encuentra clientes de su(s) zona(s) —ni siquiera buscando el
+RUC exacto de uno ajeno— y un administrador busca sobre todos.
+
+`0050` agrega índices GIN de `pg_trgm` sobre las tres columnas: un
+`ilike '%...%'` no puede usar un btree, y sin ellos cada tecleada era un
+seq scan de la cartera completa.
+
 ## Notificación por correo al enviar un pedido
 
 Al pasar de `DRAFT` a `SUBMITTED` se manda un correo con el detalle del

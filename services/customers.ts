@@ -1,5 +1,12 @@
 import "server-only";
 import { createClient } from "@/lib/supabase/server";
+import {
+  INITIAL_CUSTOMER_LIMIT,
+  MIN_SEARCH_LENGTH,
+  SEARCH_RESULT_LIMIT,
+  normalizeSearchTerm,
+  soloDigitos,
+} from "@/domain/customer-search";
 
 export type PendingCustomer = {
   id: string;
@@ -18,24 +25,81 @@ export type PendingCustomer = {
 export type ActiveCustomerOption = {
   id: string;
   razon_social: string;
+  nombre_comercial: string | null;
   ruc_o_documento: string;
   canal_id: number | null;
   condicion_pago_habitual_id: number | null;
 };
 
+const CUSTOMER_OPTION_COLUMNS =
+  "id, razon_social, nombre_comercial, ruc_o_documento, canal_id, condicion_pago_habitual_id";
+
 /**
- * Clientes ACTIVO visibles para el usuario actual (RLS ya limita por
- * zona si es vendedor, o muestra todos si es admin/control_pedidos —
- * ver customers_select en 0012_customers.sql). Usado por el selector de
- * cliente al tomar un pedido.
+ * Primeros clientes ACTIVO visibles para el usuario actual, para que el
+ * selector no abra vacío.
+ *
+ * **Es una primera página, no la cartera.** Son 3.4k clientes y PostgREST
+ * tope las respuestas en 1.000 filas: traerlos todos al navegador sería
+ * lento y —lo que pasó en producción— silenciosamente truncado. Buscar es
+ * trabajo de `searchActiveCustomers`, en el servidor.
+ *
+ * RLS ya limita por zona si es vendedor, o muestra todos si es
+ * admin/control_pedidos — ver customers_select en 0012_customers.sql.
  */
-export async function listActiveCustomers(): Promise<ActiveCustomerOption[]> {
+export async function listActiveCustomers(
+  limit: number = INITIAL_CUSTOMER_LIMIT,
+): Promise<ActiveCustomerOption[]> {
   const supabase = createClient();
   const { data, error } = await supabase
     .from("customers")
-    .select("id, razon_social, ruc_o_documento, canal_id, condicion_pago_habitual_id")
+    .select(CUSTOMER_OPTION_COLUMNS)
     .eq("estado", "ACTIVO")
-    .order("razon_social");
+    .order("razon_social")
+    .limit(limit);
+
+  if (error) throw new Error(error.message);
+  return data as unknown as ActiveCustomerOption[];
+}
+
+/**
+ * Busca clientes ACTIVO por RUC/documento, razón social o nombre
+ * comercial. Corre en el servidor con el cliente del usuario (nunca el
+ * admin), así que **la RLS por zona aplica igual**: un vendedor solo
+ * encuentra clientes de su(s) zona(s), un admin busca sobre todos.
+ *
+ * Coincidencia por `ilike %term%`, no por prefijo: la cartera legacy trae
+ * nombres con basura al inicio (asteriscos, barras), así que buscar
+ * "EJEMPLO" tiene que encontrar "**** COMERCIAL EJEMPLO S.C.R.L.".
+ *
+ * Si el término son puros dígitos se busca además por RUC con los dígitos
+ * pelados, para que un RUC tipeado con espacios o guiones igual caiga.
+ */
+export async function searchActiveCustomers(
+  rawQuery: string,
+  limit: number = SEARCH_RESULT_LIMIT,
+): Promise<ActiveCustomerOption[]> {
+  const term = normalizeSearchTerm(rawQuery);
+  if (term.length < MIN_SEARCH_LENGTH) return [];
+
+  const patrones = [
+    `razon_social.ilike.%${term}%`,
+    `nombre_comercial.ilike.%${term}%`,
+    `ruc_o_documento.ilike.%${term}%`,
+  ];
+
+  const digitos = soloDigitos(term);
+  if (digitos.length >= MIN_SEARCH_LENGTH && digitos !== term) {
+    patrones.push(`ruc_o_documento.ilike.%${digitos}%`);
+  }
+
+  const supabase = createClient();
+  const { data, error } = await supabase
+    .from("customers")
+    .select(CUSTOMER_OPTION_COLUMNS)
+    .eq("estado", "ACTIVO")
+    .or(patrones.join(","))
+    .order("razon_social")
+    .limit(limit);
 
   if (error) throw new Error(error.message);
   return data as unknown as ActiveCustomerOption[];
@@ -72,7 +136,7 @@ export async function requestNewCustomer(input: {
       estado: "PENDIENTE_DE_VALIDACION",
       solicitado_por: input.solicitadoPor,
     })
-    .select("id, razon_social, ruc_o_documento, canal_id, condicion_pago_habitual_id")
+    .select(CUSTOMER_OPTION_COLUMNS)
     .single();
 
   if (customerError) {

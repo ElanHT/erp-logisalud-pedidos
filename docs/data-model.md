@@ -509,6 +509,31 @@ inventar una dirección.
 El ubigeo es el código INEI de 6 dígitos (departamento + provincia +
 distrito) y la guía lo exige como punto de partida.
 
+## Índices de búsqueda de clientes (`0050`)
+
+El selector de cliente del flujo de pedido busca con
+`ilike '%término%'` sobre `razon_social`, `nombre_comercial` y
+`ruc_o_documento`. Un patrón que **empieza** con comodín no puede usar un
+btree, así que `0050` agrega tres índices GIN de `pg_trgm`:
+
+- `customers_razon_social_trgm_idx`
+- `customers_nombre_comercial_trgm_idx`
+- `customers_ruc_o_documento_trgm_idx`
+
+`pg_trgm` parte el texto en trigramas e indexa esos, que es la única forma
+de que un `ilike` con comodín adelante use índice. Verificado con `explain`
+sobre la cartera real: `Bitmap Index Scan on
+customers_razon_social_trgm_idx` en vez del seq scan anterior.
+
+El filtro por `estado = 'ACTIVO'` que acompaña cada búsqueda ya lo cubre
+`customers_estado_idx` (`0012`).
+
+**Por qué importa el detalle del tope:** la búsqueda tiene que correr en el
+servidor porque PostgREST tope las respuestas en 1.000 filas, y precargar
+la cartera al navegador dejaba 2.248 de los 3.248 clientes activos fuera
+del alcance del buscador — sin error visible. Ver "Búsqueda de clientes en
+el flujo de pedido" en [business-rules.md](business-rules.md).
+
 ## Auditoría
 
 Todo cambio en `customers` y en `product_tax_profiles` queda en
