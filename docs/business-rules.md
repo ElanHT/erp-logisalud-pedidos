@@ -375,6 +375,20 @@ servidor** (`searchActiveCustomers`), con debounce de 300 ms, coincidencia
 tope de 50 resultados. La lista que se ve sin escribir nada es solo la
 primera página de 50, y la UI lo dice.
 
+Es **un solo control**: un combobox (`components/combobox.tsx`) donde se
+escribe y las sugerencias caen debajo del mismo campo; un click —o Enter
+sobre la resaltada— deja el cliente elegido en el campo y cierra la lista.
+Antes eran dos controles (un input de búsqueda y un `<select>` aparte que
+había que volver a abrir), que es un paso de más en el celular, que es
+desde donde el vendedor toma los pedidos.
+
+El componente está escrito a mano porque el stack no trae ninguna librería
+de combobox, y las que hay (shadcn/ui sobre Radix + cmdk) filtran del lado
+del cliente sobre una lista precargada — exactamente lo que acá no se
+puede hacer. El `<select>` manda el `customerId` por un input oculto; el
+campo visible es solo UI, y escribir encima de una selección la deshace
+para que el campo nunca muestre un cliente y envíe otro.
+
 No se precarga la cartera en el navegador para filtrar ahí: **PostgREST
 tope las respuestas en 1.000 filas**, así que hacerlo dejaba 2.248 clientes
 (69% de la cartera) invisibles para el buscador sin ningún error a la

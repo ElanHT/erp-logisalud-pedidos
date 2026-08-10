@@ -2,6 +2,9 @@ import { defineConfig } from "vitest/config";
 import path from "node:path";
 
 export default defineConfig({
+  // tsconfig.json usa `jsx: "preserve"` porque de la transformación se
+  // encarga Next. Vitest necesita que alguien la haga: acá.
+  oxc: { jsx: { runtime: "automatic" } },
   resolve: {
     alias: {
       "@": path.resolve(__dirname, "."),
@@ -12,6 +15,9 @@ export default defineConfig({
     },
   },
   test: {
+    // Node por defecto (domain/ y services/ son lógica pura). Los tests de
+    // componentes piden jsdom con `// @vitest-environment jsdom` arriba.
     environment: "node",
+    globals: true,
   },
 });
