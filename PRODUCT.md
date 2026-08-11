@@ -136,6 +136,22 @@ explícitamente: el sistema de componentes actual (`.card`, `.btn-primary`,
 Idioma: **español rioplatense-neutro peruano**, tuteo, sin jerga de
 desarrollo en pantallas de usuario.
 
+**Convención sobre apuesta formal (preferencia permanente).** Ante la
+elección entre una dirección visual con apuesta y el estándar de la
+categoría, el usuario eligió el estándar. Queda como compromiso: la
+interfaz se ve como lo que cualquiera espera de un módulo de pedidos, y la
+ambición se gasta en acabado —espaciado, jerarquía, estados, microcopy,
+accesibilidad, rendimiento— y no en originalidad formal. Ejecutar la
+convención a fidelidad completa, sin ironía y sin gestos raros colados por
+el costado.
+
+**La vara de acabado son Shopify (admin y POS), Stripe (dashboard) y
+Linear.** No como referencias visuales a copiar, sino como el nivel de
+terminación que este producto tiene que alcanzar: la densidad respirada y
+los targets móviles de Shopify, la precisión numérica y el microcopy de
+error de Stripe, y el pulido de detalle y la velocidad percibida de
+Linear.
+
 ## Evidence on Hand
 
 - **Cartera real cargada**: 3.402 clientes, 3.248 activos, con zonas y
