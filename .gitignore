@@ -39,3 +39,8 @@ next-env.d.ts
 .vercel
 .env*
 _temp-imports/
+
+# Ajustes locales de Claude Code: permisos y preferencias de cada máquina,
+# no del equipo. `settings.json` sí se commitea si algún día hace falta
+# configuración compartida.
+.claude/settings.local.json
