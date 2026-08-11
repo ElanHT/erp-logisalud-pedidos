@@ -1,25 +1,38 @@
 "use client";
 
 import { useMemo, useState, useTransition } from "react";
+import { Combobox, type ComboboxOption } from "@/components/combobox";
 import { MENSAJE_SIN_DIRECCION } from "@/domain/customers";
+import { MIN_SEARCH_LENGTH, displayRazonSocial } from "@/domain/customer-search";
 import {
   agregarDireccionCliente,
+  buscarClientes,
   crearBorrador,
   crearClienteNuevo,
   getAddressesForCustomer,
 } from "./actions";
 
 type Seller = { id: string; codigo_representante: string; nombre_completo: string; zone: { nombre: string } | null };
-type Customer = { id: string; razon_social: string; ruc_o_documento: string };
+type Customer = {
+  id: string;
+  razon_social: string;
+  nombre_comercial?: string | null;
+  ruc_o_documento: string;
+};
 type PaymentTerm = { id: number; nombre: string };
 type CatalogOption = { id: number; nombre: string };
 type Address = { id: string; direccion: string; es_principal: boolean };
 
-function normalize(s: string) {
-  return s
-    .toLowerCase()
-    .normalize("NFD")
-    .replace(/[̀-ͯ]/g, "");
+/**
+ * Un cliente como opción del combobox: el nombre limpio arriba (sin los
+ * asteriscos que arrastra la cartera legacy) y el RUC abajo, que es el
+ * otro dato por el que el vendedor lo reconoce.
+ */
+function toOption(c: Customer): ComboboxOption {
+  const nombre = displayRazonSocial(c.razon_social);
+  const comercial = c.nombre_comercial?.trim();
+  const alias = comercial && comercial.toUpperCase() !== nombre.toUpperCase() ? ` — ${comercial}` : "";
+  return { id: c.id, label: `${nombre}${alias}`, description: c.ruc_o_documento };
 }
 
 export function NewOrderForm({
@@ -39,9 +52,8 @@ export function NewOrderForm({
 }) {
   const [isPending, startTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
-  const [customers, setCustomers] = useState(initialCustomers);
-  const [customerQuery, setCustomerQuery] = useState("");
   const [selectedCustomerId, setSelectedCustomerId] = useState("");
+  const [selectedOption, setSelectedOption] = useState<ComboboxOption | null>(null);
   const [addresses, setAddresses] = useState<Address[]>([]);
   const [selectedAddressId, setSelectedAddressId] = useState("");
   const [loadingAddresses, setLoadingAddresses] = useState(false);
@@ -66,11 +78,18 @@ export function NewOrderForm({
   // bloqueado hasta registrar una.
   const sinDireccion = !!selectedCustomerId && !loadingAddresses && addresses.length === 0;
 
-  const filteredCustomers = useMemo(() => {
-    if (!customerQuery.trim()) return customers.slice(0, 20);
-    const q = normalize(customerQuery);
-    return customers.filter((c) => normalize(c.razon_social).includes(q) || normalize(c.ruc_o_documento).includes(q)).slice(0, 20);
-  }, [customers, customerQuery]);
+  const initialOptions = useMemo(() => initialCustomers.map(toOption), [initialCustomers]);
+
+  /**
+   * Búsqueda real, en el SERVIDOR. No se filtra sobre una lista
+   * precargada: son 3.4k clientes, PostgREST corta en 1.000 filas y el
+   * resto quedaba invisible para el buscador (era el bug anterior). El
+   * debounce y el descarte de respuestas viejas los hace el Combobox.
+   */
+  async function searchOptions(term: string): Promise<ComboboxOption[]> {
+    const results = await buscarClientes(term);
+    return results.map(toOption);
+  }
 
   function handleAddAddress() {
     setNewAddressError(null);
@@ -90,7 +109,9 @@ export function NewOrderForm({
     });
   }
 
-  function handleSelectCustomer(customerId: string) {
+  function handleSelectCustomer(option: ComboboxOption | null) {
+    const customerId = option?.id ?? "";
+    setSelectedOption(option);
     setSelectedCustomerId(customerId);
     setAddresses([]);
     setSelectedAddressId("");
@@ -121,7 +142,8 @@ export function NewOrderForm({
           condicionPagoHabitualId: Number(newCustomer.condicionPagoHabitualId),
           direccion: newCustomer.direccion,
         });
-        setCustomers((prev) => [...prev, customer]);
+        // El cliente recién creado queda elegido en el mismo campo.
+        setSelectedOption(toOption(customer));
         setSelectedCustomerId(customer.id);
         setAddresses([{ id: addressId, direccion: newCustomer.direccion, es_principal: true }]);
         setSelectedAddressId(addressId);
@@ -137,6 +159,12 @@ export function NewOrderForm({
     e.preventDefault();
     const formData = new FormData(e.currentTarget);
     setError(null);
+    // El combobox no usa `required` nativo (ver components/combobox.tsx),
+    // así que el cliente se valida acá. La Server Action lo revalida.
+    if (!selectedCustomerId) {
+      setError("Selecciona un cliente.");
+      return;
+    }
     startTransition(async () => {
       try {
         await crearBorrador(formData);
@@ -248,32 +276,19 @@ export function NewOrderForm({
             </button>
           </div>
         ) : (
-          <>
-            <input
-              type="text"
-              value={customerQuery}
-              onChange={(e) => setCustomerQuery(e.target.value)}
-              placeholder="Buscar por razón social o RUC..."
-              className="mb-2 min-h-12 w-full rounded-lg border border-gray-300 px-3 py-2"
-            />
-            <select
-              name="customerId"
-              required
-              value={selectedCustomerId}
-              onChange={(e) => handleSelectCustomer(e.target.value)}
-              className="min-h-12 w-full rounded-lg border border-gray-300 px-3 py-2"
-            >
-              <option value="">Selecciona un cliente</option>
-              {filteredCustomers.map((c) => (
-                <option key={c.id} value={c.id}>
-                  {c.razon_social} ({c.ruc_o_documento})
-                </option>
-              ))}
-            </select>
-            {customers.length === 0 && (
-              <p className="mt-1 text-sm text-gray-500">No hay clientes activos visibles para tu zona.</p>
-            )}
-          </>
+          <Combobox
+            name="customerId"
+            required
+            label="Cliente"
+            selected={selectedOption}
+            onSelect={handleSelectCustomer}
+            onSearch={searchOptions}
+            initialOptions={initialOptions}
+            placeholder="Escribe el RUC, la razón social o el nombre comercial..."
+            minSearchLength={MIN_SEARCH_LENGTH}
+            emptyMessage="Ningún cliente activo de tu cartera coincide"
+            hint={`Primeros ${initialOptions.length} clientes en orden alfabético. Escribe ${MIN_SEARCH_LENGTH} caracteres o más para buscar en toda tu cartera.`}
+          />
         )}
       </div>
 

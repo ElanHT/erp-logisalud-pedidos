@@ -5,10 +5,26 @@ import { getCurrentUser, requireUserId } from "@/lib/auth/session";
 import { resolveOrderSellerId } from "@/domain/orders";
 import { MENSAJE_SIN_DIRECCION } from "@/domain/customers";
 import { createDraftOrder } from "@/services/orders";
-import { addCustomerAddress, listCustomerAddresses, requestNewCustomer } from "@/services/customers";
+import {
+  addCustomerAddress,
+  listCustomerAddresses,
+  requestNewCustomer,
+  searchActiveCustomers,
+} from "@/services/customers";
 
 export async function getAddressesForCustomer(customerId: string) {
   return listCustomerAddresses(customerId);
+}
+
+/**
+ * Búsqueda de clientes para el selector del pedido. Va al servidor a
+ * propósito: son 3.4k clientes y no se pueden precargar en el navegador
+ * (PostgREST tope en 1.000 filas). `requireUserId` asegura que haya
+ * sesión; el filtrado por zona lo hace la RLS, no esta capa.
+ */
+export async function buscarClientes(query: string) {
+  await requireUserId();
+  return searchActiveCustomers(query);
 }
 
 /**

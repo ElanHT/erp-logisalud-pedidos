@@ -2,7 +2,18 @@ import "server-only";
 import { createClient } from "@/lib/supabase/server";
 import { logAudit } from "./audit-log";
 
-export type CatalogTable = "sales_channels" | "suppliers" | "zones" | "payment_terms";
+export type CatalogTable =
+  | "sales_channels"
+  | "suppliers"
+  | "zones"
+  | "payment_terms"
+  // Catálogos de despacho (Fase Stock y Operaciones). Comparten la forma
+  // (id, nombre, descripcion, estado), así que reusan este servicio.
+  // inventory_sources NO está acá: tiene `tipo` y vive en services/inventory.ts.
+  | "warehouses"
+  | "vehicles"
+  | "drivers"
+  | "transporters";
 
 export type CatalogItem = {
   id: number;

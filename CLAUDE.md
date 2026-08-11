@@ -52,6 +52,17 @@ marcados explícitamente como "pendientes de confirmar con Contabilidad".
 - `supabase/migrations/` — migraciones SQL numeradas secuencialmente.
 - `docs/` — decisiones de arquitectura, seguridad y reglas de negocio.
 
+Para elegir una fila de un catálogo grande (clientes, productos) usar
+`components/combobox.tsx` en vez de un `<select>`: un `<select>` obliga a
+precargar las opciones, y los catálogos grandes no caben (PostgREST tope
+las respuestas en 1.000 filas). El combobox recibe una función `onSearch`
+que consulta al servidor, y ya trae debounce, teclado y descarte de
+respuestas viejas.
+
+Los tests de componentes van en `tests/components/`, con
+`// @vitest-environment jsdom` en la primera línea — el resto de la suite
+corre en Node.
+
 ## Identidad de marca
 
 - Colores: `logisalud.green` (#4BB168), `logisalud.teal` (#4ABCC2) —

@@ -42,6 +42,26 @@ const SECTIONS = [
     description: "Aprobar o rechazar clientes nuevos solicitados por vendedores.",
   },
   {
+    href: "/admin/maestros/despacho",
+    title: "Despacho",
+    description: "Fuentes de stock, almacenes, vehículos, choferes y transportistas.",
+  },
+  {
+    href: "/operaciones",
+    title: "Despachos por preparar",
+    description: "Bandeja de Operaciones: preparar y despachar pedidos listos.",
+  },
+  {
+    href: "/control-pedidos/documentos",
+    title: "Documentación electrónica",
+    description: "Borradores de factura/boleta y guía de remisión generados al despachar.",
+  },
+  {
+    href: "/admin/configuracion/empresa",
+    title: "Datos de la empresa",
+    description: "Razón social, RUC y domicilio fiscal del emisor de comprobantes y guías.",
+  },
+  {
     href: "/admin/configuracion/notificaciones",
     title: "Notificaciones de pedidos",
     description: "A qué correos se avisa cuando un vendedor envía un pedido.",

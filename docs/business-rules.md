@@ -344,6 +344,66 @@ priorizar esta corrección antes de operar a volumen.
 - **`es_agente_retencion`**: queda en el default `false`. El origen no lo
   trae, y sigue atado a los supuestos de retenciones de Fase 6.
 
+### Asteriscos en la razón social
+
+21 de los 3.399 clientes migrados traen la razón social con asteriscos
+escritos al inicio, en cantidad variable y a veces con barras:
+`'* BOTICA ...'`, `'**** ... S.C.R.L.'`, `'*****///INVERSIONES ...'`.
+
+**No son un indicador del sistema**: no hay código que los genere — ni
+score de relevancia, ni marca de debug. Venían así en el CSV del piloto de
+WhatsApp, alguien los tipeó a mano allá y el importador los cargó
+literales. Como `*` ordena antes que las letras, coparon la cabeza de
+cualquier lista ordenada por nombre.
+
+El selector de pedido los **limpia solo para mostrar**
+(`displayRazonSocial` en `domain/customer-search.ts`); el dato original
+queda intacto en `customers.razon_social`, y la búsqueda encuentra el
+cliente igual escribiendo el nombre sin los asteriscos.
+
+**Pendiente de decidir:** si en el piloto significaban algo (¿cliente
+preferente? ¿moroso? ¿prioridad de visita?) hay que modelarlo en una
+columna propia. Si no significaban nada, corresponde una migración que
+normalice los 21 nombres. Hasta que alguien lo confirme, no se toca el
+dato.
+
+### Búsqueda de clientes en el flujo de pedido
+
+La cartera son ~3.400 clientes, así que el selector **busca en el
+servidor** (`searchActiveCustomers`), con debounce de 300 ms, coincidencia
+`ilike '%término%'` sobre RUC/documento, razón social y nombre comercial, y
+tope de 50 resultados. La lista que se ve sin escribir nada es solo la
+primera página de 50, y la UI lo dice.
+
+Es **un solo control**: un combobox (`components/combobox.tsx`) donde se
+escribe y las sugerencias caen debajo del mismo campo; un click —o Enter
+sobre la resaltada— deja el cliente elegido en el campo y cierra la lista.
+Antes eran dos controles (un input de búsqueda y un `<select>` aparte que
+había que volver a abrir), que es un paso de más en el celular, que es
+desde donde el vendedor toma los pedidos.
+
+El componente está escrito a mano porque el stack no trae ninguna librería
+de combobox, y las que hay (shadcn/ui sobre Radix + cmdk) filtran del lado
+del cliente sobre una lista precargada — exactamente lo que acá no se
+puede hacer. El `<select>` manda el `customerId` por un input oculto; el
+campo visible es solo UI, y escribir encima de una selección la deshace
+para que el campo nunca muestre un cliente y envíe otro.
+
+No se precarga la cartera en el navegador para filtrar ahí: **PostgREST
+tope las respuestas en 1.000 filas**, así que hacerlo dejaba 2.248 clientes
+(69% de la cartera) invisibles para el buscador sin ningún error a la
+vista. Es el mismo tope que ya obligó a paginar el resumen de la cartera en
+`services/customers-import.ts`.
+
+La consulta corre con el cliente Supabase **del usuario**, nunca el de
+service role, así que la RLS de `customers_select` aplica igual: un
+vendedor solo encuentra clientes de su(s) zona(s) —ni siquiera buscando el
+RUC exacto de uno ajeno— y un administrador busca sobre todos.
+
+`0050` agrega índices GIN de `pg_trgm` sobre las tres columnas: un
+`ilike '%...%'` no puede usar un btree, y sin ellos cada tecleada era un
+seq scan de la cartera completa.
+
 ## Notificación por correo al enviar un pedido
 
 Al pasar de `DRAFT` a `SUBMITTED` se manda un correo con el detalle del
@@ -379,6 +439,182 @@ de identificador a mitad del flujo.
 
 **No es un número de comprobante fiscal.** Ese lo emite el proveedor de
 facturación electrónica al despachar, y no tiene por qué coincidir.
+
+## Stock y Operaciones
+
+### La fuente de stock la decide Operaciones, nunca el vendedor
+
+El stock de fuentes distintas (`central` vs. `regional`) **no se mezcla
+automáticamente**. La fuente se elige al confirmar el despacho, y por eso
+`inventory_source_id` vive en `fulfillments` y no en `orders`: cuando el
+vendedor toma el pedido todavía no se sabe —ni le corresponde decidir— de
+qué almacén va a salir.
+
+### El stock registrado es manual, y no bloquea el despacho
+
+`stock_levels` es un **registro que Operaciones mantiene a mano**. No hay
+integración en tiempo real con un ERP de inventario, así que el número
+puede estar desfasado del almacén físico.
+
+Consecuencia deliberada: **una línea sin stock registrado no bloquea el
+despacho.** La UI avisa cuando lo preparado supera lo disponible, y la
+línea se puede marcar como `pendiente_de_stock` con un comentario
+obligatorio. Bloquear contra un número que sabemos que puede estar mal
+frenaría despachos reales por un dato de mentira.
+
+**TODO — integración real de inventario:** cuando exista, el punto de
+enganche es `services/fulfillments.ts::getStockForOrder`, y ahí se decide
+si la validación pasa a ser bloqueante. Mientras no exista, el criterio
+es el de arriba.
+
+### Qué exige confirmar un despacho
+
+- Rol `operaciones` o `administrador`.
+- El pedido en `READY_FOR_OPERATIONS` (esto impide el doble despacho).
+- **Dirección de entrega activa.** Desde Fase 4 un pedido no puede
+  enviarse sin dirección, así que esto es una red para pedidos legacy: si
+  uno se cuela, se bloquea con un mensaje que dice qué hacer en vez de
+  despachar a ninguna parte.
+- **Todas** las líneas del pedido, una sola vez cada una — aunque alguna
+  vaya en cantidad 0.
+- **Lote** si el producto tiene `controla_lote`, y **fecha de
+  vencimiento** si tiene `controla_vencimiento`.
+- **Motivo obligatorio** en toda diferencia entre cantidad pedida y
+  preparada.
+- Transporte asignado: vehículo **con** chofer, o transportista externo.
+  Un vehículo sin chofer no es una asignación completa.
+
+Todo va en una sola transacción: si una línea no cumple, no se crea el
+despacho ni se mueve el pedido.
+
+### Qué ve el vendedor
+
+Solo lectura: que su pedido salió, cuándo, de qué fuente, con qué
+transporte, y qué se preparó de cada línea (con el motivo si hubo
+diferencia). No puede editar nada — no existe policy de escritura para él
+en `fulfillments` ni en `fulfillment_items`.
+
+### Auditoría
+
+Van a `audit_logs` con la acción `confirmar_despacho`: la fuente de stock
+elegida, el almacén y el transporte, toda diferencia entre cantidad
+pedida y preparada con su motivo, y las líneas marcadas como pendientes
+de stock con su comentario.
+
+## Documentación electrónica
+
+### Estado: BORRADORES para revisión humana, sin integración
+
+**La app NO llama a la API de NubeFact.** Al confirmar el despacho genera
+dos JSON locales y los guarda en
+`pedidos.electronic_document_drafts`:
+
+1. **Comprobante** (factura o boleta), y
+2. **Guía de remisión (GRE)**.
+
+Ambos siguen la estructura *aproximada* documentada públicamente por
+NubeFact, y llevan un bloque `_borrador` con el aviso, las advertencias
+detectadas y la marca `quitar_este_bloque_antes_de_enviar`. Los nombres y
+códigos de campo están **sin confirmar** contra el manual oficial: el
+propósito de esta etapa es que la facturadora los compare campo por
+campo.
+
+Los revisan `administrador` y `control_pedidos`, en
+`/control-pedidos/documentos`. El vendedor no los ve.
+
+### Quién es el emisor
+
+Los datos legales del emisor **no están hardcodeados** en el generador:
+salen del singleton `pedidos.company_settings` (una sola fila, `id = 1`),
+editable solo por `administrador` en `/admin/configuracion/empresa`. Ahí
+viven razón social, RUC, domicilio fiscal, ubigeo, teléfono y email, y
+alimentan el bloque de emisor de **ambos** documentos.
+
+Si la fila no existe, la generación de borradores falla en voz alta en vez
+de emitir un documento sin emisor. El destinatario, en cambio, sale
+siempre del cliente del pedido.
+
+### Descripción de los items de la GRE
+
+La GRE describe cada producto con el mismo formato que la facturadora usa
+hoy a mano:
+
+```
+<nombre del producto> LT: <lote> FV: DD/MM/AAAA
+```
+
+Ejemplo real: `VITACAPIL SHAMPOO CJA X 1 FCO X 380 ML LT: 2030056 FV:
+31/03/2029`.
+
+El lote y el vencimiento los captura Operaciones por línea al confirmar el
+despacho, así que la descripción se arma con lo **efectivamente
+despachado**, no con lo pedido — y las cantidades de la GRE son las
+`cantidad_preparada`, no las pedidas. Si una línea va sin lote o sin
+vencimiento, se omite ese fragmento en vez de escribir `LT: null`.
+
+### TODO — Pendiente
+
+> Pendiente: reemplazar generación de borrador por llamada real a la API
+> de NubeFact (POST a la ruta configurada con el token), una vez
+> confirmada la estructura exacta de campos contra el manual oficial y
+> rotado el token de forma segura (variables de entorno
+> `NUBEFACT_API_URL` y `NUBEFACT_API_TOKEN`, nunca en el repo).
+
+El gancho está marcado con el mismo TODO en tres lugares:
+`pedidos.confirm_dispatch` (`0046`), `services/fulfillments.ts` (donde se
+llama a la generación) y `domain/nubefact-draft.ts`.
+
+Va **después** de que el despacho quedó grabado y el pedido pasó a
+`DISPATCHED`, y la generación **nunca lanza**: un fallo no puede revertir
+un despacho físico que ya ocurrió — el mismo criterio que la notificación
+por correo al enviar el pedido. Cuando exista la emisión real, deberá
+quedar registrada con su propio estado, reintentable, como
+`notification_logs`.
+
+### Huecos conocidos que el borrador reporta como advertencia
+
+Estos no son bugs del generador: son datos que el modelo todavía no tiene
+y que hay que resolver antes de emitir de verdad.
+
+- **`orders` no guarda qué comprobante eligió el vendedor.** Hoy nadie lo
+  elige al tomar el pedido. Si el cliente admite `FACTURA_O_BOLETA`, el
+  borrador asume **FACTURA** y lo marca como advertencia. Resolverlo pide
+  una decisión: o se agrega el selector al flujo de pedido, o la
+  facturadora lo define al emitir.
+- **Serie y número son placeholder.** La serie la autoriza SUNAT y el
+  correlativo fiscal lo lleva NubeFact; `orders.numero` es el número
+  interno del pedido y **no** el del comprobante.
+- **`peso_bruto_total` está incompleto.** La GRE lo exige, y
+  `products.peso_unitario_futuro` quedó sin cargar para casi todo el
+  catálogo. El borrador calcula con lo que hay y lista los productos sin
+  peso.
+- **Solo un almacén tiene dirección cargada.** `warehouses.direccion` y
+  `warehouses.ubigeo_codigo` existen desde `0049`, y **Almacén Central
+  Lima** ya los tiene (`CAR. PANAMERICANA SUR KM.29.5 INT.A-08`, ubigeo
+  `150119`): un pedido que sale de ahí genera la GRE con
+  `punto_de_partida_direccion` y `punto_de_partida_ubigeo` resueltos y
+  **sin advertencia**. Los demás almacenes siguen en `null` a propósito —
+  nadie confirmó su dirección real — y el borrador los advierte hasta que
+  se completen desde `/admin/maestros/despacho` o la BD.
+- **El ubigeo de llegada depende del cliente.** Sale de
+  `orders.ubigeo_snapshot`; si el cliente se cargó sin ubigeo, el
+  borrador advierte `punto_de_llegada_ubigeo` vacío.
+
+Recordatorio que sigue aplicando: los clientes sin RUC de contribuyente
+válido están restringidos a `BOLETA` por constraint. Si el borrador
+resuelve factura para uno de ellos, lo advierte.
+
+### Excel adjunto en el correo del pedido
+
+El correo que sale al pasar a `SUBMITTED` lleva adjunto
+`pedido-[numero]-[fecha].xlsx` con el encabezado del pedido, la tabla de
+líneas y el total general. Se genera con `exceljs` (ya en el stack por el
+importador de listas de precios).
+
+Los importes **no se recalculan** para el Excel: se suman las líneas que
+grabó `submit_order`, igual que el cuerpo del correo, para que el adjunto
+no pueda contradecir a la BD. Si generar el Excel falla, **el correo sale
+igual sin adjunto** — perder el adjunto es malo, no avisar es peor.
 
 ## Qué NO cubre esta fase
 
