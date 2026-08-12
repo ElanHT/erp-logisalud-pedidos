@@ -4,6 +4,7 @@ import { useMemo, useState, useTransition } from "react";
 import { Combobox, type ComboboxOption } from "@/components/combobox";
 import { MENSAJE_SIN_DIRECCION } from "@/domain/customers";
 import { MIN_SEARCH_LENGTH, displayRazonSocial } from "@/domain/customer-search";
+import { IconAlert, IconError, IconPlus, IconSpinner } from "@/components/icons";
 import {
   agregarDireccionCliente,
   buscarClientes,
@@ -12,7 +13,12 @@ import {
   getAddressesForCustomer,
 } from "./actions";
 
-type Seller = { id: string; codigo_representante: string; nombre_completo: string; zone: { nombre: string } | null };
+type Seller = {
+  id: string;
+  codigo_representante: string;
+  nombre_completo: string;
+  zone: { nombre: string } | null;
+};
 type Customer = {
   id: string;
   razon_social: string;
@@ -35,6 +41,13 @@ function toOption(c: Customer): ComboboxOption {
   return { id: c.id, label: `${nombre}${alias}`, description: c.ruc_o_documento };
 }
 
+/**
+ * Arranque del pedido: cliente, dirección y condición de pago.
+ *
+ * Es el mismo encabezado que después queda colapsado arriba de las líneas,
+ * así que se ve igual acá y allá: el vendedor no cruza a "otra pantalla",
+ * el encabezado se cierra y aparece la carga de productos.
+ */
 export function NewOrderForm({
   isAdmin,
   sellers,
@@ -81,10 +94,10 @@ export function NewOrderForm({
   const initialOptions = useMemo(() => initialCustomers.map(toOption), [initialCustomers]);
 
   /**
-   * Búsqueda real, en el SERVIDOR. No se filtra sobre una lista
-   * precargada: son 3.4k clientes, PostgREST corta en 1.000 filas y el
-   * resto quedaba invisible para el buscador (era el bug anterior). El
-   * debounce y el descarte de respuestas viejas los hace el Combobox.
+   * Búsqueda real, en el SERVIDOR. No se filtra sobre una lista precargada:
+   * son 3.4k clientes, PostgREST corta en 1.000 filas y el resto quedaba
+   * invisible para el buscador. El debounce y el descarte de respuestas
+   * viejas los hace el Combobox.
    */
   async function searchOptions(term: string): Promise<ComboboxOption[]> {
     const results = await buscarClientes(term);
@@ -148,7 +161,14 @@ export function NewOrderForm({
         setAddresses([{ id: addressId, direccion: newCustomer.direccion, es_principal: true }]);
         setSelectedAddressId(addressId);
         setShowNewCustomerForm(false);
-        setNewCustomer({ razonSocial: "", rucODocumento: "", canalId: "", zonaId: "", condicionPagoHabitualId: "", direccion: "" });
+        setNewCustomer({
+          razonSocial: "",
+          rucODocumento: "",
+          canalId: "",
+          zonaId: "",
+          condicionPagoHabitualId: "",
+          direccion: "",
+        });
       } catch (err) {
         setNewCustomerError(err instanceof Error ? err.message : "No se pudo registrar el cliente.");
       }
@@ -162,7 +182,7 @@ export function NewOrderForm({
     // El combobox no usa `required` nativo (ver components/combobox.tsx),
     // así que el cliente se valida acá. La Server Action lo revalida.
     if (!selectedCustomerId) {
-      setError("Selecciona un cliente.");
+      setError("Elegí un cliente.");
       return;
     }
     startTransition(async () => {
@@ -176,14 +196,21 @@ export function NewOrderForm({
   }
 
   return (
-    <form onSubmit={handleSubmit} className="card flex flex-col gap-4 p-5">
-      {error && <p className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p>}
+    <form onSubmit={handleSubmit} className="panel flex flex-col gap-4 p-4">
+      {error && (
+        <p className="aviso-error" role="alert">
+          <IconError className="mt-0.5 h-4 w-4 shrink-0" />
+          <span>{error}</span>
+        </p>
+      )}
 
       {isAdmin && (
         <div>
-          <label className="mb-1 block text-sm font-medium text-gray-700">A nombre de qué vendedor/zona</label>
-          <select name="sellerId" required className="min-h-12 w-full rounded-lg border border-gray-300 px-3 py-2">
-            <option value="">Selecciona un vendedor</option>
+          <label className="etiqueta" htmlFor="sellerId">
+            A nombre de qué vendedor
+          </label>
+          <select id="sellerId" name="sellerId" required className="campo">
+            <option value="">Elegí un vendedor</option>
             {sellers.map((s) => (
               <option key={s.id} value={s.id}>
                 {s.nombre_completo} {s.zone ? `— ${s.zone.nombre}` : ""} ({s.codigo_representante})
@@ -194,47 +221,53 @@ export function NewOrderForm({
       )}
 
       <div>
-        <div className="mb-1 flex items-center justify-between">
-          <label className="block text-sm font-medium text-gray-700">Cliente</label>
+        <div className="mb-1.5 flex items-center justify-between gap-3">
+          <label className="etiqueta mb-0">Cliente</label>
           <button
             type="button"
             onClick={() => setShowNewCustomerForm((v) => !v)}
-            className="text-sm text-logisalud-teal hover:underline"
+            className="min-h-11 rounded-lg px-2 text-sm font-medium text-[#1c6d71] hover:bg-logisalud-teal/10"
           >
-            {showNewCustomerForm ? "Cancelar" : "+ Cliente nuevo"}
+            {showNewCustomerForm ? "Cancelar" : "Cliente nuevo"}
           </button>
         </div>
 
         {showNewCustomerForm ? (
-          // Deliberadamente un <div>, no un <form>: ya estamos dentro del
-          // <form> principal de "Nuevo pedido" y un <form> anidado es HTML
-          // inválido — el navegador colapsa la estructura y el submit de
-          // este mini-formulario termina disparando el formulario exterior
-          // en su lugar (bug real encontrado al probar esto en el navegador).
-          <div className="flex flex-col gap-2 rounded-lg bg-gray-50 p-3">
-            {newCustomerError && <p className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">{newCustomerError}</p>}
-            <p className="text-sm text-gray-600">
-              El cliente queda pendiente de validación — no se puede usar en el pedido hasta que
-              control de pedidos o un administrador lo apruebe.
+          <div className="flex flex-col gap-3 rounded-lg bg-slate-50 p-3">
+            <p className="aviso-info" role="note">
+              <IconAlert className="mt-0.5 h-4 w-4 shrink-0" />
+              <span>
+                El cliente queda pendiente de validación. Podés armarle el pedido, pero no se puede
+                enviar hasta que Control de Pedidos lo apruebe.
+              </span>
             </p>
+
+            {newCustomerError && (
+              <p className="aviso-error" role="alert">
+                <IconError className="mt-0.5 h-4 w-4 shrink-0" />
+                <span>{newCustomerError}</span>
+              </p>
+            )}
+
             <input
+              className="campo"
+              placeholder="Razón social"
               value={newCustomer.razonSocial}
               onChange={(e) => updateNewCustomer("razonSocial", e.target.value)}
-              placeholder="Razón social"
-              className="min-h-10 rounded-lg border border-gray-300 px-3 py-2 text-sm"
             />
             <input
+              className="campo cifra"
+              inputMode="numeric"
+              placeholder="RUC o documento"
               value={newCustomer.rucODocumento}
               onChange={(e) => updateNewCustomer("rucODocumento", e.target.value)}
-              placeholder="RUC / documento"
-              className="min-h-10 rounded-lg border border-gray-300 px-3 py-2 text-sm"
             />
             <select
+              className="campo"
               value={newCustomer.canalId}
               onChange={(e) => updateNewCustomer("canalId", e.target.value)}
-              className="min-h-10 rounded-lg border border-gray-300 px-3 py-2 text-sm"
             >
-              <option value="">Canal</option>
+              <option value="">Canal de venta</option>
               {salesChannels.map((c) => (
                 <option key={c.id} value={c.id}>
                   {c.nombre}
@@ -242,9 +275,9 @@ export function NewOrderForm({
               ))}
             </select>
             <select
+              className="campo"
               value={newCustomer.zonaId}
               onChange={(e) => updateNewCustomer("zonaId", e.target.value)}
-              className="min-h-10 rounded-lg border border-gray-300 px-3 py-2 text-sm"
             >
               <option value="">Zona</option>
               {zones.map((z) => (
@@ -254,9 +287,9 @@ export function NewOrderForm({
               ))}
             </select>
             <select
+              className="campo"
               value={newCustomer.condicionPagoHabitualId}
               onChange={(e) => updateNewCustomer("condicionPagoHabitualId", e.target.value)}
-              className="min-h-10 rounded-lg border border-gray-300 px-3 py-2 text-sm"
             >
               <option value="">Condición de pago habitual</option>
               {paymentTerms.map((p) => (
@@ -266,12 +299,18 @@ export function NewOrderForm({
               ))}
             </select>
             <input
+              className="campo"
+              placeholder="Dirección de entrega"
               value={newCustomer.direccion}
               onChange={(e) => updateNewCustomer("direccion", e.target.value)}
-              placeholder="Dirección"
-              className="min-h-10 rounded-lg border border-gray-300 px-3 py-2 text-sm"
             />
-            <button type="button" onClick={handleCreateCustomer} className="btn-secondary self-start text-sm" disabled={isPending}>
+            <button
+              type="button"
+              onClick={handleCreateCustomer}
+              className="btn-secondary self-start"
+              disabled={isPending}
+            >
+              {isPending ? <IconSpinner className="h-5 w-5" /> : null}
               Registrar cliente
             </button>
           </div>
@@ -284,63 +323,77 @@ export function NewOrderForm({
             onSelect={handleSelectCustomer}
             onSearch={searchOptions}
             initialOptions={initialOptions}
-            placeholder="Escribe el RUC, la razón social o el nombre comercial..."
+            placeholder="Buscá por RUC, razón social o nombre comercial..."
             minSearchLength={MIN_SEARCH_LENGTH}
             emptyMessage="Ningún cliente activo de tu cartera coincide"
-            hint={`Primeros ${initialOptions.length} clientes en orden alfabético. Escribe ${MIN_SEARCH_LENGTH} caracteres o más para buscar en toda tu cartera.`}
+            hint={`Escribí ${MIN_SEARCH_LENGTH} caracteres o más para buscar en toda tu cartera.`}
           />
         )}
       </div>
 
       {selectedCustomerId && (
         <div>
-          <label className="mb-1 block text-sm font-medium text-gray-700">Dirección de entrega</label>
+          <label className="etiqueta" htmlFor="customerAddressId">
+            Dirección de entrega
+          </label>
           {loadingAddresses ? (
-            <p className="text-sm text-gray-500">Cargando direcciones...</p>
+            <p className="flex items-center gap-2 py-3 text-sm text-slate-600">
+              <IconSpinner className="h-4 w-4" />
+              Cargando direcciones...
+            </p>
           ) : sinDireccion ? (
-            // Bloqueo intencional, no advertencia: preferimos frenar la
-            // toma del pedido a que salga un despacho sin dirección real
-            // (ver docs/business-rules.md). Los clientes de la cartera
-            // migrada entraron sin dirección, así que se captura acá
-            // mismo en vez de mandar al vendedor a otra pantalla.
-            <div className="flex flex-col gap-2 rounded-lg border-2 border-amber-300 bg-amber-50 p-3">
-              <p className="text-sm font-medium text-amber-900">⚠ {MENSAJE_SIN_DIRECCION}</p>
+            // Bloqueo intencional, no advertencia: preferimos frenar la toma
+            // del pedido a que salga un despacho sin dirección real (ver
+            // docs/business-rules.md). La cartera migrada entró sin
+            // direcciones, así que se captura acá mismo en vez de mandar al
+            // vendedor a otra pantalla.
+            <div className="flex flex-col gap-3 rounded-lg border border-amber-300 bg-amber-50 p-3">
+              <p className="flex items-start gap-2.5 text-sm text-amber-900">
+                <IconAlert className="mt-0.5 h-4 w-4 shrink-0" />
+                <span>{MENSAJE_SIN_DIRECCION}</span>
+              </p>
               {newAddressError && (
-                <p className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">{newAddressError}</p>
+                <p className="aviso-error" role="alert">
+                  <IconError className="mt-0.5 h-4 w-4 shrink-0" />
+                  <span>{newAddressError}</span>
+                </p>
               )}
               <input
-                value={newAddress.direccion}
-                onChange={(e) => setNewAddress((prev) => ({ ...prev, direccion: e.target.value }))}
+                className="campo"
                 placeholder="Dirección de entrega"
-                className="min-h-12 rounded-lg border border-gray-300 px-3 py-2 text-sm"
+                value={newAddress.direccion}
+                onChange={(e) => setNewAddress((p) => ({ ...p, direccion: e.target.value }))}
               />
               <input
-                value={newAddress.referencia}
-                onChange={(e) => setNewAddress((prev) => ({ ...prev, referencia: e.target.value }))}
+                className="campo"
                 placeholder="Referencia (opcional)"
-                className="min-h-12 rounded-lg border border-gray-300 px-3 py-2 text-sm"
+                value={newAddress.referencia}
+                onChange={(e) => setNewAddress((p) => ({ ...p, referencia: e.target.value }))}
               />
               <button
                 type="button"
                 onClick={handleAddAddress}
-                className="btn-secondary self-start text-sm"
-                disabled={isPending || !newAddress.direccion.trim()}
+                className="btn-secondary self-start"
+                disabled={isPending || newAddress.direccion.trim() === ""}
               >
-                Guardar dirección y continuar
+                {isPending ? <IconSpinner className="h-5 w-5" /> : <IconPlus className="h-5 w-5" />}
+                Guardar dirección
               </button>
             </div>
           ) : (
             <select
+              id="customerAddressId"
               name="customerAddressId"
               required
+              className="campo"
               value={selectedAddressId}
               onChange={(e) => setSelectedAddressId(e.target.value)}
-              className="min-h-12 w-full rounded-lg border border-gray-300 px-3 py-2"
             >
-              <option value="">Selecciona una dirección</option>
+              <option value="">Elegí una dirección</option>
               {addresses.map((a) => (
                 <option key={a.id} value={a.id}>
-                  {a.direccion} {a.es_principal ? "(principal)" : ""}
+                  {a.direccion}
+                  {a.es_principal ? " (principal)" : ""}
                 </option>
               ))}
             </select>
@@ -349,9 +402,11 @@ export function NewOrderForm({
       )}
 
       <div>
-        <label className="mb-1 block text-sm font-medium text-gray-700">Condición de pago</label>
-        <select name="paymentTermsId" required className="min-h-12 w-full rounded-lg border border-gray-300 px-3 py-2">
-          <option value="">Selecciona una condición de pago</option>
+        <label className="etiqueta" htmlFor="paymentTermsId">
+          Condición de pago
+        </label>
+        <select id="paymentTermsId" name="paymentTermsId" required className="campo">
+          <option value="">Elegí una condición</option>
           {paymentTerms.map((p) => (
             <option key={p.id} value={p.id}>
               {p.nombre}
@@ -363,10 +418,10 @@ export function NewOrderForm({
       <button
         type="submit"
         className="btn-primary"
-        disabled={isPending || sinDireccion}
-        title={sinDireccion ? MENSAJE_SIN_DIRECCION : undefined}
+        disabled={isPending || !selectedCustomerId || !selectedAddressId}
       >
-        Crear borrador y continuar
+        {isPending ? <IconSpinner className="h-5 w-5" /> : null}
+        Empezar el pedido
       </button>
     </form>
   );

@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useId, useRef, useState } from "react";
+import { IconClose } from "./icons";
 
 /**
  * Combobox de un solo campo: se escribe en el input, las sugerencias
@@ -240,9 +241,9 @@ export function Combobox({
             type="button"
             onClick={clear}
             aria-label="Quitar el cliente elegido"
-            className="absolute right-2 top-1/2 -translate-y-1/2 rounded-full px-2 py-1 text-gray-500 hover:bg-gray-100 hover:text-gray-700"
+            className="absolute right-1.5 top-1/2 flex h-9 w-9 -translate-y-1/2 items-center justify-center rounded-lg text-slate-500 hover:bg-slate-100 hover:text-slate-800"
           >
-            ✕
+            <IconClose className="h-4 w-4" />
           </button>
         )}
       </div>
