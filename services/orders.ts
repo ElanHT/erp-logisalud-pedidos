@@ -162,7 +162,9 @@ export async function getOrderDetail(orderId: string): Promise<OrderDetail | nul
   };
 }
 
-export type AddOrderItemResult = { ok: true; itemId: string } | { ok: false; reason: "NO_PRICE" | "NO_TAX_PROFILE" | "NO_CHANNEL" };
+export type AddOrderItemResult =
+  | { ok: true; itemId: string }
+  | { ok: false; reason: "NO_PRICE" | "NO_TAX_PROFILE" | "NO_CHANNEL" | "PRODUCTO_INACTIVO" };
 
 /**
  * Agrega una línea al pedido en DRAFT. El precio mostrado acá es solo
@@ -177,6 +179,19 @@ export async function addOrderItem(input: {
   cantidad: number;
 }): Promise<AddOrderItemResult> {
   const supabase = createClient();
+
+  // Un producto inactivo no se puede facturar, así que tampoco se puede
+  // pedir. La pantalla ya no lo ofrece —filtra por estado— pero la Server
+  // Action recibe un productId cualquiera, y sin esto una petición armada a
+  // mano metería al pedido algo que después no se puede emitir.
+  const { data: product, error: productError } = await supabase
+    .from("products")
+    .select("estado")
+    .eq("id", input.productId)
+    .maybeSingle();
+  if (productError) throw new Error(productError.message);
+  if (!product) throw new Error("El producto no existe o no es visible.");
+  if (product.estado !== "activo") return { ok: false, reason: "PRODUCTO_INACTIVO" };
 
   const { data: customer, error: customerError } = await supabase
     .from("customers")

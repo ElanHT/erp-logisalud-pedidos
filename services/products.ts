@@ -13,6 +13,8 @@ export type ProductWithTaxProfile = {
   marca: string | null;
   unidad_medida: string;
   estado: string;
+  /** Por qué está en ese estado. Se muestra solo en el catálogo administrativo. */
+  nota_estado: string | null;
   controla_lote: boolean;
   controla_vencimiento: boolean;
   supplier: { nombre: string } | null;

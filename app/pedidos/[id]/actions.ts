@@ -28,6 +28,8 @@ export async function agregarProducto(orderId: string, customerId: string, formD
       NO_PRICE: "Este producto no tiene precio vigente para el canal del cliente.",
       NO_TAX_PROFILE: "Este producto no tiene perfil tributario vigente.",
       NO_CHANNEL: "El cliente no tiene canal de venta asignado.",
+      PRODUCTO_INACTIVO:
+        "Ese producto está inactivo y no se puede facturar, así que no se puede agregar al pedido.",
     };
     throw new Error(messages[result.reason]);
   }

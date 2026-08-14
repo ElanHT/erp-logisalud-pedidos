@@ -47,3 +47,25 @@ export function displayNombreProducto(descripcion: string, codigoInterno: string
   if (nombre.toLowerCase().includes("bonificaci")) return nombre;
   return `${nombre}${SUFIJO_BONIFICACION}`;
 }
+
+/**
+ * ¿Este producto se le puede ofrecer al vendedor al armar un pedido?
+ *
+ * Dos condiciones, y las dos son de negocio, no de interfaz:
+ *
+ * - **Activo.** Un producto inactivo no se puede facturar. Desde `0052` eso
+ *   incluye a los que no existen en el catálogo de NubeFact.
+ * - **Con precio vigente** en algún canal, o no hay con qué valorizar la
+ *   línea.
+ *
+ * Vive acá y no dentro de la pantalla para que la regla se pueda probar y
+ * para que no se desincronice entre los lugares que la aplican. La garantía
+ * fuerte igual está en el servidor: `addOrderItem` rechaza un producto
+ * inactivo aunque la petición venga armada a mano.
+ */
+export function esOfrecibleEnPedido(producto: {
+  estado: string;
+  hasCurrentPrice: boolean;
+}): boolean {
+  return producto.estado === "activo" && producto.hasCurrentPrice;
+}

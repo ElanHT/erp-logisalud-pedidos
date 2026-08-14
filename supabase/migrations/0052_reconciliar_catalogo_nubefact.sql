@@ -575,5 +575,122 @@ begin
   raise notice 'Excepcion DAPHA 10 respetada: 10 codigos quedaron INAFECTOS sin importar el catalogo.';
 end $reconciliacion$;
 
+
+-- ============================================================================
+-- Desactivacion temporal de los productos que NubeFact no tiene
+-- ============================================================================
+--
+-- Confirmado por el usuario el 2026-08-14 sobre el reporte de la vista previa.
+-- Estos 16 productos estan activos en nuestro catalogo pero NO existen en el
+-- catalogo de NubeFact, asi que hoy no se pueden facturar correctamente.
+--
+-- Se DESACTIVAN, no se borran: es reversible. Dejan de aparecer en el buscador
+-- de "Nuevo pedido" (que filtra estado = 'activo') y siguen visibles en el
+-- catalogo administrativo con la nota que explica por que.
+
+alter table pedidos.products add column if not exists nota_estado text;
+
+comment on column pedidos.products.nota_estado is
+  'Por que el producto esta en su estado actual. Se muestra en el catalogo administrativo; no se usa en pedidos ni en documentos fiscales.';
+
+do $desactivar$
+declare
+  v_codigos text[] := array[
+    'DHP218','DHP219','DHP220','DHP221','DHP222','DHP223','DHP224','DHP225',
+    'DHP226','DHP227','DHP228','DHP229','DHP421','DHP423','DHP424','PLGS14'];
+  v_nota text := 'Inactivo temporalmente — no está en el catálogo de NubeFact, no se puede facturar. Contactar a quien administre la cuenta NubeFact para agregarlo.';
+  v_desactivados integer;
+  v_ya_inactivos integer;
+  v_no_existen integer;
+  v_fila record;
+begin
+  select count(*) into v_no_existen
+  from unnest(v_codigos) c
+  where not exists (select 1 from pedidos.products p
+                    where upper(btrim(p.codigo_interno)) = c);
+
+  select count(*) into v_ya_inactivos
+  from pedidos.products p
+  where upper(btrim(p.codigo_interno)) = any(v_codigos) and p.estado = 'inactivo';
+
+  update pedidos.products p
+  set estado = 'inactivo',
+      nota_estado = v_nota,
+      updated_at = now()
+  where upper(btrim(p.codigo_interno)) = any(v_codigos)
+    and p.estado = 'activo';
+  get diagnostics v_desactivados = row_count;
+
+  raise notice '--- Desactivacion por ausencia en NubeFact ---';
+  raise notice 'Desactivados ahora: % | ya estaban inactivos: % | no existen en products: %',
+    v_desactivados, v_ya_inactivos, v_no_existen;
+
+  if v_no_existen > 0 then
+    for v_fila in
+      select c as codigo from unnest(v_codigos) c
+      where not exists (select 1 from pedidos.products p
+                        where upper(btrim(p.codigo_interno)) = c)
+    loop
+      raise notice '  NO EXISTE en products, nada que desactivar: %', v_fila.codigo;
+    end loop;
+  end if;
+
+  -- La nota se refresca tambien en los que ya estaban inactivos por otro
+  -- motivo, para que el catalogo diga la razon vigente y no una vieja.
+  update pedidos.products p
+  set nota_estado = v_nota, updated_at = now()
+  where upper(btrim(p.codigo_interno)) = any(v_codigos)
+    and p.estado = 'inactivo'
+    and p.nota_estado is distinct from v_nota;
+end $desactivar$;
+
+-- ============================================================================
+-- Borrado del producto de prueba DAPHA10-EJ
+-- ============================================================================
+--
+-- Placeholder sembrado en Fase 2 que quedo obsoleto al importar la lista real
+-- de Diphasac (ver docs/business-rules.md). El usuario confirmo borrarlo.
+--
+-- Solo se borra si NO tiene ningun pedido asociado. Si tiene, se desactiva:
+-- un producto referenciado por un pedido no se puede borrar sin romper el
+-- historico, y el historico de pedidos no se toca.
+
+do $borrar_ejemplo$
+declare
+  v_id uuid;
+  v_pedidos integer;
+  v_precios integer;
+begin
+  select id into v_id from pedidos.products where codigo_interno = 'DAPHA10-EJ';
+
+  if v_id is null then
+    raise notice 'DAPHA10-EJ: no existe, nada que hacer.';
+    return;
+  end if;
+
+  select count(*) into v_pedidos from pedidos.order_items where product_id = v_id;
+
+  if v_pedidos > 0 then
+    update pedidos.products
+    set estado = 'inactivo',
+        nota_estado = 'Producto de ejemplo de Fase 2, obsoleto. No se borra porque tiene pedidos asociados; se desactiva para que no se pueda usar.',
+        updated_at = now()
+    where id = v_id;
+    raise notice 'DAPHA10-EJ: tiene % linea(s) de pedido asociadas. NO se borro; quedo inactivo.', v_pedidos;
+    return;
+  end if;
+
+  -- Sin pedidos: se borra. Sus precios de lista se van con el, porque solo
+  -- existen para sostener a este producto de prueba (price_list_items no
+  -- tiene on delete cascade, asi que hay que quitarlos a mano).
+  delete from pedidos.price_list_items where product_id = v_id;
+  get diagnostics v_precios = row_count;
+
+  -- product_tax_profiles y stock_levels si tienen cascade.
+  delete from pedidos.products where id = v_id;
+
+  raise notice 'DAPHA10-EJ: sin pedidos asociados, BORRADO (y % fila(s) de price_list_items que solo lo sostenian a el).', v_precios;
+end $borrar_ejemplo$;
+
 drop table if exists _nubefact_catalogo;
 drop table if exists _excepcion_dapha;

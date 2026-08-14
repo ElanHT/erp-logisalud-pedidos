@@ -28,6 +28,17 @@ trate como "a confirmar", no como reglas cerradas:
    (IGV, valor referencial, etc.). **No implementar lógica tributaria
    de bonificaciones sin esa confirmación.**
 
+   **Contrastar con Contabilidad si la bonificación debería ser inafecta
+   como regla general, o si estos 2 casos son simplemente un error de
+   captura en NubeFact — de 207 códigos de bonificación en su catálogo,
+   solo estos 2 aparecen como inafectos, sin patrón claro.**
+
+   Los dos casos son `BODHP109` (JAMOL 5) y `BODHP110` (GLICOFAST 1000).
+   Decisión del usuario (2026-08-14): se tratan como **posible error de
+   carga en NubeFact, no como regla**. `0052` aplica lo que dice el
+   catálogo porque es la fuente de verdad acordada, pero eso no zanja la
+   pregunta de fondo.
+
 2. **Umbral de retención evaluado por comprobante, no por pedido
    total.** El supuesto de trabajo es que la retención se calcula por
    cada comprobante emitido, no sobre la suma de un pedido que genere
@@ -242,6 +253,57 @@ De los 207 códigos `BO`, **71 no tienen su par sin prefijo** en el catálogo
 (por ejemplo `BOP000015`). No rompe nada —la regla de presentación es solo el
 prefijo— pero significa que para esos 71 no se puede verificar la premisa de
 que son "la bonificación de X".
+
+### 16 productos desactivados por no estar en NubeFact
+
+**Confirmado por el usuario el 2026-08-14** sobre el reporte de la vista
+previa. Estos 16 estaban activos en nuestro catálogo pero **no existen en el
+catálogo de NubeFact**, así que hoy no se pueden facturar:
+
+```
+DHP218  DHP219  DHP220  DHP221  DHP222  DHP223  DHP224  DHP225
+DHP226  DHP227  DHP228  DHP229  DHP421  DHP423  DHP424  PLGS14
+```
+
+Se **desactivan, no se borran**: es reversible. `0052` los pasa a
+`estado = 'inactivo'` y les escribe la razón en la columna nueva
+`products.nota_estado`, que el catálogo administrativo muestra:
+
+> Inactivo temporalmente — no está en el catálogo de NubeFact, no se puede
+> facturar. Contactar a quien administre la cuenta NubeFact para agregarlo.
+
+Dejan de aparecer en el buscador de "Nuevo pedido" porque esa pantalla ya
+filtra por `estado = 'activo'`. Además `addOrderItem` rechaza un producto
+inactivo aunque llegue por una petición armada a mano: la interfaz no es la
+garantía.
+
+Para reactivarlos alcanza con volverlos a `activo` y limpiar la nota, una vez
+que existan en NubeFact.
+
+### `DAPHA10-EJ`: borrado, con salvaguarda
+
+El placeholder de Fase 2, obsoleto desde la importación real de Diphasac.
+`0052` lo borra **solo si no tiene ninguna línea de pedido asociada**; si la
+tiene, lo deja inactivo con su nota, porque borrar un producto referenciado
+por un pedido rompería el histórico. Sus filas de `price_list_items` se van
+con él cuando se borra (esa tabla no tiene `on delete cascade`).
+
+### Los 279 códigos de NubeFact sin match: gap esperado
+
+De los 425 códigos del catálogo, **279 no existen en nuestro `products`**, en
+su mayoría bonificaciones `BO` y líneas de producto que no se importaron en
+Fase 3.
+
+**Queda sin acción a propósito.** No es un error de la reconciliación: es
+consecuencia de que **promociones y bonificaciones siguen diferidas desde
+Fase 3**, así que esas líneas nunca entraron al catálogo. Se resolverá cuando
+se implemente el motor de promociones/bonificaciones, no antes.
+
+Lo que sí importa mientras tanto: un pedido no puede incluir un producto que
+no existe en nuestro catálogo, así que este gap no puede generar un
+comprobante inválido. El riesgo va en la dirección contraria —productos
+nuestros que NubeFact no tiene— y eso es justamente lo que resuelve la
+desactivación de los 16.
 
 ### Cómo ver el reporte antes de mergear
 

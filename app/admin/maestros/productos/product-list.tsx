@@ -84,6 +84,11 @@ export function ProductList({
                     </span>
                   )}
                 </div>
+                {p.nota_estado && (
+                  <p className="mt-1.5 rounded-lg border border-amber-300 bg-amber-50 px-2.5 py-1.5 text-xs text-amber-900">
+                    {p.nota_estado}
+                  </p>
+                )}
               </Link>
               <button
                 className="btn-secondary shrink-0 text-sm"

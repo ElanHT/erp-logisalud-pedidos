@@ -10,7 +10,7 @@ import { displayRazonSocial } from "@/domain/customer-search";
 import { OrderItemComposer } from "./order-item-composer";
 import { OrderHeader } from "./order-header";
 import { ObservationForm } from "./observation-form";
-import { displayNombreProducto } from "@/domain/products";
+import { displayNombreProducto, esOfrecibleEnPedido } from "@/domain/products";
 
 const ESTADO_LABELS: Record<string, string> = {
   DRAFT: "Borrador",
@@ -58,8 +58,11 @@ export default async function OrderDetailPage({ params }: { params: { id: string
     listCatalog("payment_terms"),
   ]);
 
+  // La regla vive en domain/products.ts para poder probarla; acá solo se
+  // aplica. Los productos desactivados por no estar en NubeFact (0052) caen
+  // por esta misma condición.
   const activeProducts = products
-    .filter((p) => p.estado === "activo" && p.hasCurrentPrice)
+    .filter(esOfrecibleEnPedido)
     .map((p) => ({ id: p.id, descripcion: p.descripcion, codigo_interno: p.codigo_interno }));
 
   const total = order.items.reduce((acc, item) => acc + item.total, 0);

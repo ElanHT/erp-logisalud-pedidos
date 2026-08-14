@@ -3,6 +3,7 @@ import {
   codigoRegularDeBonificacion,
   displayNombreProducto,
   esBonificacion,
+  esOfrecibleEnPedido,
 } from "@/domain/products";
 
 describe("esBonificacion", () => {
@@ -60,5 +61,33 @@ describe("displayNombreProducto", () => {
 
   it("no marca dos veces si el origen ya lo decía", () => {
     expect(displayNombreProducto("ALGO BONIFICACION", "BOX1")).toBe("ALGO BONIFICACION");
+  });
+});
+
+describe("esOfrecibleEnPedido", () => {
+  it("ofrece un producto activo y con precio", () => {
+    expect(esOfrecibleEnPedido({ estado: "activo", hasCurrentPrice: true })).toBe(true);
+  });
+
+  it("NO ofrece un producto inactivo, aunque tenga precio", () => {
+    // Es el caso de los 16 desactivados en 0052 por no estar en NubeFact:
+    // tienen precio de lista, pero no se pueden facturar.
+    expect(esOfrecibleEnPedido({ estado: "inactivo", hasCurrentPrice: true })).toBe(false);
+  });
+
+  it("NO ofrece un producto sin precio vigente", () => {
+    expect(esOfrecibleEnPedido({ estado: "activo", hasCurrentPrice: false })).toBe(false);
+  });
+
+  it("los 16 códigos desactivados por NubeFact quedan fuera del buscador", () => {
+    const desactivados = [
+      "DHP218","DHP219","DHP220","DHP221","DHP222","DHP223","DHP224","DHP225",
+      "DHP226","DHP227","DHP228","DHP229","DHP421","DHP423","DHP424","PLGS14",
+    ];
+    // Tras 0052 quedan en estado inactivo; ninguno debe ser ofrecible.
+    const ofrecibles = desactivados.filter(() =>
+      esOfrecibleEnPedido({ estado: "inactivo", hasCurrentPrice: true }),
+    );
+    expect(ofrecibles).toHaveLength(0);
   });
 });
