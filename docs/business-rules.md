@@ -205,6 +205,51 @@ regular cuyo código empiece con `BO` se marcaría por error. Hoy no hay
 ninguno; si aparece, hay que endurecerlo exigiendo que exista el par sin el
 prefijo.
 
+## Reconciliación del catálogo contra NubeFact (`0052`)
+
+La fuente de verdad del catálogo es la cuenta de **NubeFact en producción**
+(RUC 20610284508). El export que entregó el usuario el 2026-08-13 trae **426
+filas**, y `0052` reconcilia contra él: actualiza `products.descripcion` y
+versiona `product_tax_profiles` cuando la afectación difiere.
+
+Mapeo de `TIPO DE AFECTACIÓN (IGV)`: `10` → GRAVADO 18%, `30` → INAFECTO 0%.
+
+Del catálogo, en números: **423 filas GRAVADO, 2 INAFECTO, 1 sin afectación**.
+Cero códigos duplicados y cero descripciones vacías.
+
+### `DSCTO1` no es un producto
+
+Es la única fila sin tipo de afectación, con unidad `NIU` y categoría
+`DESCUENTO`: es la **línea de descuento** que NubeFact usa al facturar, no un
+producto. Queda **excluida** de la reconciliación. Por eso `0052` trabaja con
+425 y no con 426.
+
+### Las 2 filas INAFECTO son ambas bonificaciones — revisar
+
+`BODHP109` (JAMOL 5) y `BODHP110` (GLICOFAST 1000) son las únicas dos
+INAFECTO del catálogo, y las dos son códigos `BO`. Sus pares regulares
+`DHP109` y `DHP110` **no existen en el catálogo**.
+
+Que solo 2 de 207 bonificaciones sean inafectas parece inconsistente: o el
+tratamiento correcto de una bonificación es inafecto y faltan 205, o esas dos
+están mal. **Sin confirmar.** `0052` aplica lo que dice el catálogo porque es
+la fuente de verdad acordada, pero esto merece revisión — se cruza con el
+supuesto pendiente #1 de Fase 6 (tratamiento tributario de bonificaciones).
+
+### 71 bonificaciones sin par regular en el catálogo
+
+De los 207 códigos `BO`, **71 no tienen su par sin prefijo** en el catálogo
+(por ejemplo `BOP000015`). No rompe nada —la regla de presentación es solo el
+prefijo— pero significa que para esos 71 no se puede verificar la premisa de
+que son "la bonificación de X".
+
+### Cómo ver el reporte antes de mergear
+
+`0052` imprime el reporte completo por `raise notice` al aplicarse (códigos
+sin match, qué productos cambian de afectación, cuántas descripciones se
+actualizaron). Para verlo **antes**, hay una consulta de solo lectura en
+[consultas/preview-reconciliacion-nubefact.sql](consultas/preview-reconciliacion-nubefact.sql).
+
 ## Perfil tributario: la excepción DAPHA 10
 
 **Confirmado por el usuario el 2026-08-13.** Al reconciliar el catálogo
