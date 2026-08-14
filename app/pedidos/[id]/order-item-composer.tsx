@@ -12,6 +12,7 @@ import {
   quitarProducto,
   solicitarDescuento,
 } from "./actions";
+import { displayNombreProducto } from "@/domain/products";
 
 type Product = { id: string; descripcion: string; codigo_interno: string };
 type OrderItem = {
@@ -75,7 +76,9 @@ export function OrderItemComposer({
 
   const opciones: ComboboxOption[] = products.map((p) => ({
     id: p.id,
-    label: p.descripcion,
+    // La bonificación se marca acá: su par regular trae la MISMA descripción
+    // y en el buscador se verían idénticos.
+    label: displayNombreProducto(p.descripcion, p.codigo_interno),
     description: p.codigo_interno,
   }));
 
@@ -285,7 +288,9 @@ export function OrderItemComposer({
                   <div className="px-4 py-3">
                     <div className="flex items-start justify-between gap-3">
                       <p className="min-w-0 font-medium leading-snug text-slate-900">
-                        {item.product?.descripcion ?? "—"}
+                        {item.product
+                          ? displayNombreProducto(item.product.descripcion, item.product.codigo_interno)
+                          : "—"}
                       </p>
                       <p className="cifra shrink-0 font-semibold text-slate-900">
                         {formatSoles(item.total)}

@@ -18,6 +18,7 @@
  */
 
 import { esRucContribuyenteValido, type TipoComprobantePermitido } from "./customers";
+import { valorUnitarioSinIgv } from "./orders";
 
 export const AVISO_BORRADOR =
   "BORRADOR SIN VALIDAR — generado localmente para revisión humana. No se envió a NubeFact. " +
@@ -47,7 +48,7 @@ export type DraftItem = {
   descripcion: string;
   unidadMedida: string;
   cantidad: number;
-  /** Valor unitario sin IGV, tal como lo grabó submit_order. */
+  /** Precio unitario CON IGV incluido, tal como lo grabó submit_order. */
   precioUnitario: number;
   igv: number;
   subtotal: number;
@@ -282,8 +283,11 @@ export function buildComprobanteBorrador(
       codigo: i.codigo,
       descripcion: i.descripcion,
       cantidad: i.cantidad,
-      valor_unitario: i.precioUnitario,
-      precio_unitario: round2(i.precioUnitario * (1 + (i.afectacionTributaria === "GRAVADO" ? i.tasaIgv / 100 : 0))),
+      // `precio_unitario` en la base YA incluye IGV (las listas de canal son
+      // precio final), así que el valor unitario del comprobante —que va sin
+      // IGV— se deriva hacia atrás en vez de multiplicar hacia adelante.
+      valor_unitario: valorUnitarioSinIgv(i.precioUnitario, i.afectacionTributaria, i.tasaIgv),
+      precio_unitario: round2(i.precioUnitario),
       subtotal: i.subtotal,
       tipo_de_igv: i.afectacionTributaria === "GRAVADO" ? 1 : 8,
       igv: i.igv,

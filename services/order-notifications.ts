@@ -11,6 +11,7 @@ import {
   type OrderEmailData,
   type OrderEmailItem,
 } from "@/domain/order-email";
+import { displayNombreProducto } from "@/domain/products";
 
 // ---------------------------------------------------------------------
 // Destinatarios (gestión por el administrador)
@@ -195,7 +196,11 @@ async function loadOrderEmailData(
   const order = orderResult.data as unknown as OrderRow;
   const items: OrderEmailItem[] = ((itemsResult.data ?? []) as unknown as ItemRow[]).map((i) => ({
     codigo: i.product?.codigo_interno ?? "—",
-    descripcion: i.product?.descripcion ?? "—",
+    // El correo y el Excel los lee la oficina, que corre el mismo riesgo de
+    // confundir un producto con su bonificación: misma descripción exacta.
+    descripcion: i.product
+      ? displayNombreProducto(i.product.descripcion, i.product.codigo_interno)
+      : "—",
     cantidad: num(i.cantidad),
     precioUnitario: num(i.precio_unitario),
     igv: num(i.igv),

@@ -135,6 +135,95 @@ decisiones de negocio:
   precios — la UI lo deja dicho para no generar confusión sobre cuál
   es el camino correcto.
 
+## Precios: las listas de canal YA INCLUYEN IGV
+
+**Confirmado por el usuario el 2026-08-13.** Los precios de las listas
+importadas —PVF Farma/Horizontal, PVF Mayorista/Top, PVF
+Instituciones/Clínicas, PVF Subdistribuidores, PVF Minicadenas— son
+**precio final al público**, no base imponible.
+
+Por lo tanto, para un producto GRAVADO:
+
+```
+total    = cantidad × precio_unitario          (NO se multiplica por 1.18)
+subtotal = total / (1 + tasa/100)              (base imponible, derivada)
+igv      = total − subtotal                    (por resta, no por producto)
+```
+
+Para INAFECTO no hay nada que derivar: `subtotal = total`, `igv = 0`.
+
+`subtotal` **no cambió de significado**: sigue siendo la base imponible, que
+es lo que el comprobante necesita como `total_gravada`. El IGV se saca por
+resta y no multiplicando la base, para que `subtotal + igv` dé exactamente
+el total y no quede un céntimo suelto por redondear las dos partes por
+separado.
+
+El `valor_unitario` del comprobante (que va **sin** IGV) también se deriva
+hacia atrás: `precio_unitario / (1 + tasa/100)`.
+
+### El bug que esto corrige (`0051`)
+
+Hasta `0051`, la lógica tomaba `price_list_items.precio` como base y le
+sumaba el 18% encima. **Todo pedido con productos GRAVADO salía con el total
+inflado un 18%.** Ejemplo real: 12 unidades a S/ 25.42 daban S/ 359.95 en
+vez de S/ 305.04.
+
+Estaba en cuatro lugares, y como el SQL es la capa autoritativa, arreglar
+solo el TypeScript no habría alcanzado:
+
+- `pedidos.submit_order` — recalcula todas las líneas al enviar.
+- `pedidos.decide_approval_request` — al aprobar un precio especial.
+- `calculateLineItem` en `domain/orders.ts`.
+- `buildComprobanteBorrador` en `domain/nubefact-draft.ts`.
+
+`pedidos.reevaluate_order` no recalcula líneas, así que no se tocó.
+
+`0051` incluye una auditoría que **solo informa**: cuenta las líneas ya
+grabadas cuyo total sigue la fórmula vieja y lo deja en un `raise notice`.
+No corrige datos: qué hacer con esos pedidos es decisión del usuario.
+
+## Bonificaciones: el prefijo `BO`
+
+**Confirmado por el usuario el 2026-08-13.** Los códigos que empiezan con
+`BO` son la versión de **bonificación** de su par regular (`BOBSA207` es la
+bonificación de `BSA207`), y ambos traen la **misma descripción exacta**. En
+pantalla se ven idénticos, y un vendedor puede agregar el equivocado sin
+darse cuenta.
+
+Se resuelve en presentación, sin tocar el dato: `displayNombreProducto`
+(`domain/products.ts`) agrega `(Bonificación)` al nombre cuando el código
+empieza con `BO`. Aplica en el buscador de productos, la lista de líneas del
+pedido, el detalle del pedido, el maestro de productos, la bandeja de
+Operaciones y el correo/Excel del pedido.
+
+**No aplica en los documentos fiscales.** La descripción del comprobante y
+de la guía es la del producto; marcar una bonificación ahí es una decisión
+tributaria (transferencia gratuita), no de interfaz, y está sin resolver.
+
+**Límite conocido:** la regla es el prefijo y nada más, así que un producto
+regular cuyo código empiece con `BO` se marcaría por error. Hoy no hay
+ninguno; si aparece, hay que endurecerlo exigiendo que exista el par sin el
+prefijo.
+
+## Perfil tributario: la excepción DAPHA 10
+
+**Confirmado por el usuario el 2026-08-13.** Al reconciliar el catálogo
+contra el exportado de NubeFact (RUC 20610284508), estos diez códigos
+**quedan INAFECTOS pase lo que diga ese catálogo** — el catálogo de NubeFact
+tiene un error ahí:
+
+```
+DHP100  DHP101  DHP102  DHP105  DHP106
+BODHP100  BODHP101  BODHP102  BODHP105  BODHP106
+```
+
+Es toda la familia **DAPHA 10** y **DUO DAPHA 10**, con sus bonificaciones.
+
+Cualquier reconciliación futura contra NubeFact tiene que respetar esta
+lista. Si en algún momento se confirma que el catálogo de NubeFact se
+corrigió, hay que quitar la excepción explícitamente, no dejarla vencer en
+silencio.
+
 ## Fase 4 — Pedidos
 
 Máquina de estados completa, diagrama y tabla de transiciones en

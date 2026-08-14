@@ -5,6 +5,7 @@ import { Breadcrumb } from "@/components/breadcrumb";
 import { EditProductForm } from "./edit-product-form";
 import { PriceCorrectionForm } from "./price-correction-form";
 import { editProduct, submitPriceCorrection } from "./actions";
+import { displayNombreProducto } from "@/domain/products";
 
 function formatMoney(value: number | null | undefined): string {
   if (value === null || value === undefined) return "—";
@@ -30,11 +31,11 @@ export default async function ProductDetailPage({ params }: { params: { id: stri
           items={[
             { label: "Maestros", href: "/admin" },
             { label: "Productos", href: "/admin/maestros/productos" },
-            { label: product.descripcion },
+            { label: displayNombreProducto(product.descripcion, product.codigo_interno) },
           ]}
         />
         <h2 className="text-xl font-semibold">
-          {product.descripcion}{" "}
+          {displayNombreProducto(product.descripcion, product.codigo_interno)}{" "}
           <span className="text-base font-normal text-gray-500">({product.codigo_interno})</span>
         </h2>
         <p className="mt-1 text-sm text-gray-600">

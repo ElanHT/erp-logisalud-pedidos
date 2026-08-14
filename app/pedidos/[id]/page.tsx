@@ -10,6 +10,7 @@ import { displayRazonSocial } from "@/domain/customer-search";
 import { OrderItemComposer } from "./order-item-composer";
 import { OrderHeader } from "./order-header";
 import { ObservationForm } from "./observation-form";
+import { displayNombreProducto } from "@/domain/products";
 
 const ESTADO_LABELS: Record<string, string> = {
   DRAFT: "Borrador",
@@ -133,7 +134,9 @@ export default async function OrderDetailPage({ params }: { params: { id: string
                 <li key={item.id} className="flex items-start gap-3 px-4 py-3">
                   <div className="min-w-0 flex-1">
                     <p className="font-medium leading-snug text-slate-900">
-                      {item.product?.descripcion ?? "—"}
+                      {item.product
+                        ? displayNombreProducto(item.product.descripcion, item.product.codigo_interno)
+                        : "—"}
                     </p>
                     <p className="cifra mt-0.5 text-sm text-slate-600">
                       {item.cantidad} × {formatSoles(item.precio_unitario)} · IGV{" "}

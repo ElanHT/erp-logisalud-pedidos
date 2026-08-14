@@ -124,9 +124,40 @@ export function calculateLineItem(input: {
   if (input.precioVigente === null) {
     return { ok: false, reason: "NO_PRICE" };
   }
-  const subtotal = round2(input.cantidad * input.precioVigente);
-  const igv = input.afectacionTributaria === "GRAVADO" ? round2(subtotal * (input.tasaAplicable / 100)) : 0;
-  return { ok: true, subtotal, igv, total: round2(subtotal + igv) };
+  // Los precios de las listas de canal (PVF Farma, Mayorista, Instituciones,
+  // Subdistribuidores, Minicadenas) YA INCLUYEN IGV: son precio final, no
+  // base imponible. Así que el total de la línea es cantidad × precio, sin
+  // agregar nada encima.
+  //
+  // El desglose se deriva AL REVÉS, que es lo que exige el comprobante:
+  // base = total / (1 + tasa/100), igv = total - base. `subtotal` sigue
+  // siendo la base imponible, así que el invariante total = subtotal + igv
+  // se mantiene y nada aguas abajo cambia de significado.
+  const total = round2(input.cantidad * input.precioVigente);
+
+  if (input.afectacionTributaria !== "GRAVADO") {
+    return { ok: true, subtotal: total, igv: 0, total };
+  }
+
+  const subtotal = round2(total / (1 + input.tasaAplicable / 100));
+  // El IGV se saca por resta y no por multiplicación, para que
+  // subtotal + igv dé exactamente el total y no quede un céntimo suelto
+  // por redondear las dos partes por separado.
+  const igv = round2(total - subtotal);
+  return { ok: true, subtotal, igv, total };
+}
+
+/**
+ * Precio unitario SIN IGV, para el `valor_unitario` del comprobante.
+ * `precio_unitario` en la base incluye IGV.
+ */
+export function valorUnitarioSinIgv(
+  precioConIgv: number,
+  afectacionTributaria: "GRAVADO" | "INAFECTO",
+  tasaAplicable: number,
+): number {
+  if (afectacionTributaria !== "GRAVADO") return precioConIgv;
+  return Math.round((precioConIgv / (1 + tasaAplicable / 100)) * 10000) / 10000;
 }
 
 function round2(n: number): number {
