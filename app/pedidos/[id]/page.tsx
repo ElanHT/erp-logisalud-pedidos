@@ -1,12 +1,16 @@
 import { notFound } from "next/navigation";
-import { getOrderDetail } from "@/services/orders";
 import Link from "next/link";
+import { getOrderDetail } from "@/services/orders";
 import { getFulfillmentForOrder } from "@/services/fulfillments";
 import { getCurrentUser } from "@/lib/auth/session";
 import { listProducts } from "@/services/products";
 import { listCatalog } from "@/services/catalog";
+import { formatSoles } from "@/domain/order-email";
+import { displayRazonSocial } from "@/domain/customer-search";
 import { OrderItemComposer } from "./order-item-composer";
+import { OrderHeader } from "./order-header";
 import { ObservationForm } from "./observation-form";
+import { displayNombreProducto, esOfrecibleEnPedido } from "@/domain/products";
 
 const ESTADO_LABELS: Record<string, string> = {
   DRAFT: "Borrador",
@@ -18,6 +22,21 @@ const ESTADO_LABELS: Record<string, string> = {
   DISPATCHED: "Despachado",
 };
 
+/**
+ * El estado nunca se comunica solo por color: cada uno lleva su etiqueta en
+ * palabras. Un vendedor con daltonismo, o mirando la pantalla al sol, tiene
+ * que poder leerlo igual.
+ */
+const ESTADO_ESTILOS: Record<string, string> = {
+  DRAFT: "border-slate-300 bg-slate-100 text-slate-700",
+  SUBMITTED: "border-logisalud-teal/40 bg-logisalud-teal/10 text-[#1c6d71]",
+  NEW_CUSTOMER_VALIDATION: "border-amber-300 bg-amber-50 text-amber-900",
+  ADMINISTRATIVE_EXCEPTION: "border-amber-300 bg-amber-50 text-amber-900",
+  COMMERCIAL_EXCEPTION: "border-amber-300 bg-amber-50 text-amber-900",
+  READY_FOR_OPERATIONS: "border-logisalud-green/40 bg-logisalud-green/10 text-[#276b3b]",
+  DISPATCHED: "border-logisalud-green/40 bg-logisalud-green/10 text-[#276b3b]",
+};
+
 export default async function OrderDetailPage({ params }: { params: { id: string } }) {
   const order = await getOrderDetail(params.id);
   if (!order) notFound();
@@ -26,8 +45,6 @@ export default async function OrderDetailPage({ params }: { params: { id: string
   // poder editar nada (no hay policy de escritura para él en fulfillments).
   const fulfillment = order.estado === "DISPATCHED" ? await getFulfillmentForOrder(order.id) : null;
 
-  // Los borradores de documentación electrónica los revisan administrador y
-  // control_pedidos; el vendedor no tiene nada que hacer con ellos.
   const currentUser = await getCurrentUser();
   const puedeVerBorradores =
     order.estado === "DISPATCHED" &&
@@ -41,54 +58,112 @@ export default async function OrderDetailPage({ params }: { params: { id: string
     listCatalog("payment_terms"),
   ]);
 
+  // La regla vive en domain/products.ts para poder probarla; acá solo se
+  // aplica. Los productos desactivados por no estar en NubeFact (0052) caen
+  // por esta misma condición.
   const activeProducts = products
-    .filter((p) => p.estado === "activo" && p.hasCurrentPrice)
+    .filter(esOfrecibleEnPedido)
     .map((p) => ({ id: p.id, descripcion: p.descripcion, codigo_interno: p.codigo_interno }));
 
-  return (
-    <div className="flex flex-col gap-6">
-      <div>
-        <div className="flex flex-wrap items-center gap-3">
-          <h2 className="text-xl font-semibold">{order.customer?.razon_social ?? "Pedido"}</h2>
-          <span className="rounded-full bg-logisalud-green/10 px-3 py-1 text-xs font-medium text-logisalud-green">
-            {ESTADO_LABELS[order.estado] ?? order.estado}
-          </span>
-        </div>
-        <p className="mt-1 text-sm text-gray-600">
-          Vendedor: {order.seller?.nombre_completo ?? "—"} · Dirección: {order.address?.direccion ?? "—"} · Condición de pago:{" "}
-          {order.payment_terms?.nombre ?? "—"}
-        </p>
-      </div>
+  const total = order.items.reduce((acc, item) => acc + item.total, 0);
 
+  return (
+    <div className="flex flex-col gap-4">
       {isDraft ? (
-        <OrderItemComposer
-          orderId={order.id}
-          customerId={order.customer_id}
-          items={order.items}
-          products={activeProducts}
-          paymentTerms={paymentTerms.map((p) => ({ id: p.id, nombre: p.nombre }))}
-          currentPaymentTermsId={order.payment_terms_id}
-        />
+        <>
+          <OrderHeader
+            orderId={order.id}
+            customer={{
+              id: order.customer_id,
+              razonSocial: order.customer?.razon_social ?? "—",
+              rucODocumento: order.customer?.ruc_o_documento ?? "—",
+            }}
+            address={{ id: order.customer_address_id, direccion: order.address?.direccion ?? "—" }}
+            paymentTerms={paymentTerms.map((p) => ({ id: p.id, nombre: p.nombre }))}
+            currentPaymentTermsId={order.payment_terms_id}
+            tieneLineas={order.items.length > 0}
+          />
+
+          <OrderItemComposer
+            orderId={order.id}
+            customerId={order.customer_id}
+            items={order.items}
+            products={activeProducts}
+          />
+        </>
       ) : (
-        <div className="card p-4">
-          <h3 className="font-semibold text-logisalud-green">Productos</h3>
-          <div className="mt-3 flex flex-col gap-2">
-            {order.items.map((item) => (
-              <div key={item.id} className="rounded-lg border border-gray-200 p-3">
-                <p className="font-medium text-gray-900">{item.product?.descripcion}</p>
-                <p className="text-sm text-gray-500">
-                  {item.cantidad} x {item.precio_unitario.toFixed(4)} — Total: {item.total.toFixed(2)} (IGV {item.igv.toFixed(2)})
+        <>
+          <section className="panel p-4">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div className="min-w-0">
+                <h2 className="text-xl text-slate-900">
+                  {displayRazonSocial(order.customer?.razon_social ?? "Pedido")}
+                </h2>
+                <p className="cifra mt-0.5 text-sm text-slate-600">
+                  {order.customer?.ruc_o_documento ?? "—"}
                 </p>
               </div>
-            ))}
-          </div>
-        </div>
+              <span
+                className={`shrink-0 rounded-full border px-3 py-1 text-xs font-semibold ${
+                  ESTADO_ESTILOS[order.estado] ?? "border-slate-300 bg-slate-100 text-slate-700"
+                }`}
+              >
+                {ESTADO_LABELS[order.estado] ?? order.estado}
+              </span>
+            </div>
+
+            <dl className="mt-3 grid grid-cols-1 gap-x-6 gap-y-2 border-t border-slate-200 pt-3 text-sm sm:grid-cols-2">
+              <div className="flex gap-2">
+                <dt className="shrink-0 text-slate-600">Entrega:</dt>
+                <dd className="min-w-0 text-slate-900">{order.address?.direccion ?? "—"}</dd>
+              </div>
+              <div className="flex gap-2">
+                <dt className="shrink-0 text-slate-600">Pago:</dt>
+                <dd className="text-slate-900">{order.payment_terms?.nombre ?? "—"}</dd>
+              </div>
+              <div className="flex gap-2">
+                <dt className="shrink-0 text-slate-600">Vendedor:</dt>
+                <dd className="text-slate-900">{order.seller?.nombre_completo ?? "—"}</dd>
+              </div>
+            </dl>
+          </section>
+
+          <section className="panel" aria-labelledby="productos-titulo">
+            <h3 id="productos-titulo" className="px-4 pt-4 text-lg text-slate-900">
+              Productos
+            </h3>
+            <ul className="mt-3 divide-y divide-slate-200 border-t border-slate-200">
+              {order.items.map((item) => (
+                <li key={item.id} className="flex items-start gap-3 px-4 py-3">
+                  <div className="min-w-0 flex-1">
+                    <p className="font-medium leading-snug text-slate-900">
+                      {item.product
+                        ? displayNombreProducto(item.product.descripcion, item.product.codigo_interno)
+                        : "—"}
+                    </p>
+                    <p className="cifra mt-0.5 text-sm text-slate-600">
+                      {item.cantidad} × {formatSoles(item.precio_unitario)} · IGV{" "}
+                      {formatSoles(item.igv)}
+                    </p>
+                  </div>
+                  <p className="cifra shrink-0 font-semibold text-slate-900">
+                    {formatSoles(item.total)}
+                  </p>
+                </li>
+              ))}
+            </ul>
+            <div className="flex items-center justify-between border-t border-slate-200 px-4 py-3">
+              <p className="font-medium text-slate-700">Total</p>
+              <p className="cifra text-xl font-semibold text-slate-900">{formatSoles(total)}</p>
+            </div>
+          </section>
+        </>
       )}
 
       {fulfillment && (
-        <div className="card-highlight p-4">
-          <h3 className="font-semibold text-logisalud-green">Despacho</h3>
-          <p className="mt-2 text-sm text-gray-600">
+        <section className="panel p-4">
+          <h3 className="text-lg text-slate-900">Despacho</h3>
+          <p className="mt-2 text-sm text-slate-600">
             Despachado el{" "}
             {fulfillment.fecha_despacho
               ? new Date(fulfillment.fecha_despacho).toLocaleString("es-PE", {
@@ -97,7 +172,7 @@ export default async function OrderDetailPage({ params }: { params: { id: string
               : "—"}
             {fulfillment.inventory_source && ` · ${fulfillment.inventory_source.nombre}`}
           </p>
-          <p className="mt-1 text-sm text-gray-600">
+          <p className="mt-1 text-sm text-slate-600">
             Transporte:{" "}
             {fulfillment.transporter?.nombre ??
               [fulfillment.vehicle?.nombre, fulfillment.driver?.nombre].filter(Boolean).join(" · ") ??
@@ -108,63 +183,74 @@ export default async function OrderDetailPage({ params }: { params: { id: string
               const pedida = Number(fi.order_item?.cantidad ?? 0);
               const preparada = Number(fi.cantidad_preparada);
               return (
-                <li key={idx} className={preparada !== pedida ? "text-amber-800" : "text-gray-700"}>
-                  {fi.order_item?.product?.codigo_interno ?? "—"} · pedido {pedida} · despachado{" "}
-                  {preparada}
+                <li key={idx} className={preparada !== pedida ? "text-amber-900" : "text-slate-700"}>
+                  <span className="cifra">
+                    {fi.order_item?.product?.codigo_interno ?? "—"} · pedido {pedida} · despachado{" "}
+                    {preparada}
+                  </span>
                   {fi.motivo_diferencia && ` — ${fi.motivo_diferencia}`}
                   {fi.pendiente_de_stock && " — pendiente de stock"}
                 </li>
               );
             })}
           </ul>
-        </div>
+        </section>
       )}
 
       {puedeVerBorradores && (
-        <div className="card p-4">
-          <h3 className="font-semibold text-logisalud-green">Documentación electrónica</h3>
-          <p className="mt-1 text-sm text-gray-600">
-            Borradores generados al despachar, para revisar contra el manual de la facturadora. No
-            se han enviado a ningún servicio.
+        <section className="panel p-4">
+          <h3 className="text-lg text-slate-900">Documentación electrónica</h3>
+          <p className="mt-1 text-sm text-slate-600">
+            Borradores generados al despachar, para revisar contra el manual de la facturadora. No se
+            han enviado a ningún servicio.
           </p>
           <Link
             href={`/control-pedidos/documentos/${order.id}`}
-            className="btn-secondary mt-3 inline-block text-sm"
+            className="btn-secondary mt-3 inline-flex text-sm"
           >
-            Ver JSON de Factura/Boleta y Guía (borrador)
+            Ver JSON de comprobante y guía
           </Link>
-        </div>
+        </section>
       )}
 
-      <div className="card p-4">
-        <h3 className="font-semibold text-logisalud-green">Historial de estados</h3>
-        {order.history.length === 0 ? (
-          <p className="mt-2 text-sm text-gray-600">Sin cambios de estado todavía.</p>
-        ) : (
-          <div className="mt-3 flex flex-col gap-2 text-sm">
-            {order.history.map((h) => (
-              <div key={h.id} className="flex items-center justify-between border-b border-gray-100 pb-2 last:border-0">
-                <span>
-                  {h.estado_anterior ?? "—"} → {h.estado_nuevo}
-                  {h.motivo ? ` — ${h.motivo}` : ""}
-                </span>
-                <span className="text-gray-500">{new Date(h.fecha).toLocaleString("es-PE")}</span>
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
+      {!isDraft && (
+        <section className="panel p-4">
+          <h3 className="text-lg text-slate-900">Historial de estados</h3>
+          {order.history.length === 0 ? (
+            <p className="mt-2 text-sm text-slate-600">Sin cambios de estado todavía.</p>
+          ) : (
+            <ol className="mt-3 flex flex-col gap-2 text-sm">
+              {order.history.map((h) => (
+                <li
+                  key={h.id}
+                  className="flex flex-wrap items-baseline justify-between gap-x-3 border-b border-slate-100 pb-2 last:border-0"
+                >
+                  <span className="text-slate-900">
+                    {ESTADO_LABELS[h.estado_nuevo] ?? h.estado_nuevo}
+                    {h.motivo ? ` — ${h.motivo}` : ""}
+                  </span>
+                  <span className="cifra text-slate-600">
+                    {new Date(h.fecha).toLocaleString("es-PE", { timeZone: "America/Lima" })}
+                  </span>
+                </li>
+              ))}
+            </ol>
+          )}
+        </section>
+      )}
 
-      <div className="card p-4">
-        <h3 className="font-semibold text-logisalud-green">Observaciones</h3>
+      <section className="panel p-4">
+        <h3 className="text-lg text-slate-900">Observaciones</h3>
         {order.observations.length === 0 ? (
-          <p className="mt-2 text-sm text-gray-600">Sin observaciones.</p>
+          <p className="mt-2 text-sm text-slate-600">Sin observaciones.</p>
         ) : (
           <div className="mt-3 flex flex-col gap-2 text-sm">
             {order.observations.map((o) => (
-              <div key={o.id} className="border-b border-gray-100 pb-2 last:border-0">
-                <p>{o.comentario}</p>
-                <p className="text-gray-500">{new Date(o.fecha).toLocaleString("es-PE")}</p>
+              <div key={o.id} className="border-b border-slate-100 pb-2 last:border-0">
+                <p className="text-slate-900">{o.comentario}</p>
+                <p className="cifra mt-0.5 text-slate-600">
+                  {new Date(o.fecha).toLocaleString("es-PE", { timeZone: "America/Lima" })}
+                </p>
               </div>
             ))}
           </div>
@@ -172,7 +258,7 @@ export default async function OrderDetailPage({ params }: { params: { id: string
         <div className="mt-3">
           <ObservationForm orderId={order.id} />
         </div>
-      </div>
+      </section>
     </div>
   );
 }

@@ -3,6 +3,7 @@
 import { useMemo, useState, useTransition } from "react";
 import Link from "next/link";
 import type { ProductWithTaxProfile } from "@/services/products";
+import { displayNombreProducto } from "@/domain/products";
 
 const PAGE_SIZE = 20;
 
@@ -64,7 +65,8 @@ export function ProductList({
             <li key={p.id} className="card flex items-center justify-between gap-3 p-4">
               <Link href={`/admin/maestros/productos/${p.id}`} className="min-w-0 flex-1">
                 <p className="truncate font-semibold hover:text-logisalud-green hover:underline">
-                  {p.descripcion} <span className="text-gray-500">({p.codigo_interno})</span>
+                  {displayNombreProducto(p.descripcion, p.codigo_interno)}{" "}
+                  <span className="text-gray-500">({p.codigo_interno})</span>
                 </p>
                 <p className="text-sm text-gray-600">
                   {p.supplier?.nombre ?? "Sin proveedor"} · {p.unidad_medida}
@@ -82,6 +84,11 @@ export function ProductList({
                     </span>
                   )}
                 </div>
+                {p.nota_estado && (
+                  <p className="mt-1.5 rounded-lg border border-amber-300 bg-amber-50 px-2.5 py-1.5 text-xs text-amber-900">
+                    {p.nota_estado}
+                  </p>
+                )}
               </Link>
               <button
                 className="btn-secondary shrink-0 text-sm"

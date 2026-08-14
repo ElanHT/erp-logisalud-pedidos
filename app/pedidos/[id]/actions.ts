@@ -2,7 +2,17 @@
 
 import { revalidatePath } from "next/cache";
 import { requireUserId } from "@/lib/auth/session";
-import { addOrderItem, removeOrderItem, updatePaymentTerms, submitOrder } from "@/services/orders";
+import {
+  addOrderItem,
+  changeOrderCustomer,
+  removeOrderItem,
+  submitOrder,
+  updateOrderAddress,
+  updateOrderItemQuantity,
+  updatePaymentTerms,
+} from "@/services/orders";
+import { listCustomerAddresses, searchActiveCustomers } from "@/services/customers";
+import { mensajeCambioBloqueado } from "@/domain/order-header";
 import { createApprovalRequest } from "@/services/approvals";
 import { addOrderObservation } from "@/services/order-exceptions";
 
@@ -18,6 +28,8 @@ export async function agregarProducto(orderId: string, customerId: string, formD
       NO_PRICE: "Este producto no tiene precio vigente para el canal del cliente.",
       NO_TAX_PROFILE: "Este producto no tiene perfil tributario vigente.",
       NO_CHANNEL: "El cliente no tiene canal de venta asignado.",
+      PRODUCTO_INACTIVO:
+        "Ese producto está inactivo y no se puede facturar, así que no se puede agregar al pedido.",
     };
     throw new Error(messages[result.reason]);
   }
@@ -75,5 +87,66 @@ export async function solicitarDescuento(orderId: string, itemId: string, formDa
     comentario: String(formData.get("comentario") ?? "").trim() || undefined,
   });
 
+  revalidatePath(`/pedidos/${orderId}`);
+}
+
+/**
+ * Edición del encabezado con líneas ya cargadas. Ninguna de estas acciones
+ * toca `order_items`: corregir el encabezado no puede costarle al vendedor
+ * el trabajo de haber cargado 15 productos.
+ */
+
+export async function buscarClientesParaPedido(query: string) {
+  await requireUserId();
+  return searchActiveCustomers(query);
+}
+
+export async function getDireccionesDeCliente(customerId: string) {
+  await requireUserId();
+  return listCustomerAddresses(customerId);
+}
+
+/** Cambiar la dirección no mueve precios: es libre. */
+export async function cambiarDireccion(orderId: string, customerAddressId: string) {
+  const userId = await requireUserId();
+  if (!customerAddressId) throw new Error("Elegí una dirección de entrega.");
+  await updateOrderAddress({ orderId, customerAddressId, actor: userId });
+  revalidatePath(`/pedidos/${orderId}`);
+}
+
+/**
+ * Cambiar el cliente solo se permite si ninguna línea cambia de precio
+ * (ver domain/order-header.ts). Si alguna cambiaría, se devuelve el detalle
+ * para mostrarlo en pantalla en vez de lanzar: el vendedor necesita ver
+ * QUÉ producto lo impide, no solo que no se pudo.
+ */
+export async function cambiarCliente(
+  orderId: string,
+  customerId: string,
+  customerAddressId: string,
+) {
+  const userId = await requireUserId();
+  if (!customerId) throw new Error("Elegí un cliente.");
+  if (!customerAddressId) throw new Error("Elegí una dirección de entrega.");
+
+  const result = await changeOrderCustomer({
+    orderId,
+    customerId,
+    customerAddressId,
+    actor: userId,
+  });
+
+  if (!result.ok) {
+    return { ok: false as const, mensaje: mensajeCambioBloqueado(result.conflictos), conflictos: result.conflictos };
+  }
+
+  revalidatePath(`/pedidos/${orderId}`);
+  return { ok: true as const };
+}
+
+/** Corregir la cantidad de una línea sin tener que buscar el producto otra vez. */
+export async function cambiarCantidad(orderId: string, itemId: string, cantidad: number) {
+  const userId = await requireUserId();
+  await updateOrderItemQuantity({ orderId, itemId, cantidad, actor: userId });
   revalidatePath(`/pedidos/${orderId}`);
 }

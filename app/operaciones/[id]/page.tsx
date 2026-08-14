@@ -7,6 +7,7 @@ import {
 } from "@/services/fulfillments";
 import { puedePrepararDespacho, type OrderEstadoParaDespacho } from "@/domain/fulfillment";
 import { FulfillmentForm } from "./fulfillment-form";
+import { displayNombreProducto } from "@/domain/products";
 
 function fechaHora(iso: string | null): string {
   if (!iso) return "—";
@@ -110,7 +111,12 @@ export default async function DespachoPage({ params }: { params: { id: string } 
                     <li key={idx} className="rounded-lg border border-gray-200 p-3 text-sm">
                       <p className="font-medium text-gray-900">
                         {fi.order_item?.product?.codigo_interno ?? "—"} ·{" "}
-                        {fi.order_item?.product?.descripcion ?? "—"}
+                        {fi.order_item?.product
+                          ? displayNombreProducto(
+                              fi.order_item.product.descripcion,
+                              fi.order_item.product.codigo_interno,
+                            )
+                          : "—"}
                       </p>
                       <p className={dif ? "text-amber-800" : "text-gray-600"}>
                         Pedido {pedida} · Preparado {preparada}

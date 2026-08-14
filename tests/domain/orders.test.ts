@@ -5,6 +5,7 @@ import {
   computeAutomaticValidationOutcome,
   resolveOrderSellerFilter,
   resolveOrderSellerId,
+  valorUnitarioSinIgv,
   type OrderEstado,
 } from "@/domain/orders";
 
@@ -16,7 +17,9 @@ describe("computeAutomaticValidationOutcome / calculateLineItem — feliz camino
       afectacionTributaria: "GRAVADO",
       tasaAplicable: 18,
     });
-    expect(line).toEqual({ ok: true, subtotal: 255, igv: 45.9, total: 300.9 });
+    // 10 × 25.50 = 255.00 en total. El precio YA incluye IGV, así que el
+    // desglose se deriva hacia atrás: 255 / 1.18 = 216.10 de base.
+    expect(line).toEqual({ ok: true, subtotal: 216.1, igv: 38.9, total: 255 });
 
     const outcome = computeAutomaticValidationOutcome({
       customerEstado: "ACTIVO",
@@ -209,5 +212,77 @@ describe("calculateLineItem — manipulación de precio desde el navegador", () 
       tasaAplicable: 18,
     });
     expect(result).toEqual({ ok: true, subtotal: 20, igv: 0, total: 20 });
+  });
+});
+
+describe("calculateLineItem — los precios de canal YA incluyen IGV", () => {
+  it("no agrega 18% encima: el total es cantidad × precio", () => {
+    const line = calculateLineItem({
+      cantidad: 10,
+      precioVigente: 25.5,
+      afectacionTributaria: "GRAVADO",
+      tasaAplicable: 18,
+    });
+    // El bug que esto previene: total 300.90 en vez de 255.00, un 18% de
+    // más cobrado al cliente.
+    expect(line).toEqual({ ok: true, subtotal: 216.1, igv: 38.9, total: 255 });
+  });
+
+  it("deriva la base hacia atrás, no hacia adelante", () => {
+    const line = calculateLineItem({
+      cantidad: 1,
+      precioVigente: 118,
+      afectacionTributaria: "GRAVADO",
+      tasaAplicable: 18,
+    });
+    expect(line).toEqual({ ok: true, subtotal: 100, igv: 18, total: 118 });
+  });
+
+  it("mantiene el invariante subtotal + igv = total, sin céntimos sueltos", () => {
+    // Precios elegidos porque su división por 1.18 no es exacta: si el IGV
+    // se calculara por multiplicación en vez de por resta, acá quedaría un
+    // céntimo de diferencia.
+    for (const [cantidad, precio] of [[3, 33.33], [7, 19.9], [11, 0.99], [13, 25.42]]) {
+      const l = calculateLineItem({
+        cantidad,
+        precioVigente: precio,
+        afectacionTributaria: "GRAVADO",
+        tasaAplicable: 18,
+      });
+      if (!l.ok) throw new Error("debería calcular");
+      expect(l.subtotal + l.igv).toBeCloseTo(l.total, 10);
+      expect(l.total).toBeCloseTo(Math.round(cantidad * precio * 100) / 100, 10);
+    }
+  });
+
+  it("en INAFECTO el precio es el total tal cual, sin IGV que derivar", () => {
+    const line = calculateLineItem({
+      cantidad: 4,
+      precioVigente: 50,
+      afectacionTributaria: "INAFECTO",
+      tasaAplicable: 0,
+    });
+    expect(line).toEqual({ ok: true, subtotal: 200, igv: 0, total: 200 });
+  });
+
+  it("respeta una tasa distinta de 18 si algún día cambia", () => {
+    const line = calculateLineItem({
+      cantidad: 1,
+      precioVigente: 110,
+      afectacionTributaria: "GRAVADO",
+      tasaAplicable: 10,
+    });
+    expect(line).toEqual({ ok: true, subtotal: 100, igv: 10, total: 110 });
+  });
+});
+
+describe("valorUnitarioSinIgv", () => {
+  it("saca el IGV del precio unitario para el comprobante", () => {
+    expect(valorUnitarioSinIgv(118, "GRAVADO", 18)).toBe(100);
+    expect(valorUnitarioSinIgv(25.42, "GRAVADO", 18)).toBeCloseTo(21.5424, 4);
+  });
+
+  it("en INAFECTO devuelve el precio tal cual", () => {
+    expect(valorUnitarioSinIgv(50, "INAFECTO", 0)).toBe(50);
   });
 });

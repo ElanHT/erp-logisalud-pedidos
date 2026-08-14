@@ -1,14 +1,18 @@
 "use client";
 
-import { useMemo, useState, useTransition } from "react";
+import { useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
+import { Combobox, type ComboboxOption } from "@/components/combobox";
+import { IconCheck, IconError, IconPlus, IconSpinner, IconTrash } from "@/components/icons";
+import { formatSoles } from "@/domain/order-email";
 import {
   agregarProducto,
-  quitarProducto,
-  actualizarCondicionPago,
+  cambiarCantidad,
   enviarPedido,
+  quitarProducto,
   solicitarDescuento,
 } from "./actions";
+import { displayNombreProducto } from "@/domain/products";
 
 type Product = { id: string; descripcion: string; codigo_interno: string };
 type OrderItem = {
@@ -21,7 +25,6 @@ type OrderItem = {
   total: number;
   product: { descripcion: string; codigo_interno: string } | null;
 };
-type PaymentTerm = { id: number; nombre: string };
 
 function normalize(text: string): string {
   return text
@@ -30,69 +33,118 @@ function normalize(text: string): string {
     .toLowerCase();
 }
 
+/**
+ * Las líneas del pedido y el total pegado al pie.
+ *
+ * El total va fijo abajo porque es el dato que el vendedor le canta al
+ * cliente en voz alta, y con 5 a 20 líneas se pierde de vista apenas
+ * empieza a hacer scroll.
+ *
+ * El catálogo es chico (menos de 200 productos con precio vigente), así que
+ * acá sí se puede precargar y buscar en el navegador — a diferencia de la
+ * cartera de clientes, que son 3.4k y se busca en el servidor. Se usa el
+ * mismo combobox por consistencia y para que el vendedor aprenda un solo
+ * gesto.
+ */
 export function OrderItemComposer({
   orderId,
   customerId,
   items,
   products,
-  paymentTerms,
-  currentPaymentTermsId,
 }: {
   orderId: string;
   customerId: string;
   items: OrderItem[];
   products: Product[];
-  paymentTerms: PaymentTerm[];
-  currentPaymentTermsId: number;
 }) {
   const router = useRouter();
   const [isPending, startTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
-  const [productQuery, setProductQuery] = useState("");
-  const [submitResult, setSubmitResult] = useState<{ estadoResultado: string; priceDrift: Array<{ orderItemId: string; precioAnterior: number; precioNuevo: number }> } | null>(null);
+  const [submitResult, setSubmitResult] = useState<{
+    estadoResultado: string;
+    priceDrift: Array<{ orderItemId: string; precioAnterior: number; precioNuevo: number }>;
+  } | null>(null);
+
+  const [productoElegido, setProductoElegido] = useState<ComboboxOption | null>(null);
+  const [cantidad, setCantidad] = useState("");
+  const [ultimaAgregada, setUltimaAgregada] = useState<string | null>(null);
   const [discountFormItemId, setDiscountFormItemId] = useState<string | null>(null);
+  // Confirmación efímera por línea: cambiar una cantidad tiene que
+  // acusar recibo, o el vendedor no sabe si se grabó.
+  const [cantidadGuardada, setCantidadGuardada] = useState<string | null>(null);
+  const cantidadRef = useRef<HTMLInputElement>(null);
 
-  const filteredProducts = useMemo(() => {
-    if (!productQuery.trim()) return products.slice(0, 15);
-    const q = normalize(productQuery);
-    return products.filter((p) => normalize(p.descripcion).includes(q) || normalize(p.codigo_interno).includes(q)).slice(0, 15);
-  }, [products, productQuery]);
+  const opciones: ComboboxOption[] = products.map((p) => ({
+    id: p.id,
+    // La bonificación se marca acá: su par regular trae la MISMA descripción
+    // y en el buscador se verían idénticos.
+    label: displayNombreProducto(p.descripcion, p.codigo_interno),
+    description: p.codigo_interno,
+  }));
 
-  function handleAddProduct(e: React.FormEvent<HTMLFormElement>) {
-    e.preventDefault();
-    const formData = new FormData(e.currentTarget);
+  async function buscarProducto(term: string): Promise<ComboboxOption[]> {
+    const q = normalize(term);
+    return opciones
+      .filter((o) => normalize(o.label).includes(q) || normalize(o.description ?? "").includes(q))
+      .slice(0, 30);
+  }
+
+  function agregar() {
     setError(null);
+    if (!productoElegido) {
+      setError("Elegí un producto.");
+      return;
+    }
+    const n = Number(cantidad);
+    if (!Number.isInteger(n) || n < 1) {
+      setError("La cantidad tiene que ser un número entero de 1 o más.");
+      cantidadRef.current?.focus();
+      return;
+    }
+
     startTransition(async () => {
       try {
-        await agregarProducto(orderId, customerId, formData);
-        (e.target as HTMLFormElement).reset();
-        setProductQuery("");
+        const fd = new FormData();
+        fd.set("productId", productoElegido.id);
+        fd.set("cantidad", String(n));
+        await agregarProducto(orderId, customerId, fd);
+        setUltimaAgregada(productoElegido.id);
+        // Listo para el siguiente: el vendedor casi nunca carga uno solo.
+        setProductoElegido(null);
+        setCantidad("");
       } catch (err) {
         setError(err instanceof Error ? err.message : "No se pudo agregar el producto.");
       }
     });
   }
 
-  function handleRemove(itemId: string) {
-    startTransition(async () => {
-      await quitarProducto(orderId, itemId);
-    });
-  }
-
-  function handlePaymentTerms(e: React.FormEvent<HTMLFormElement>) {
-    e.preventDefault();
-    const formData = new FormData(e.currentTarget);
+  function quitar(itemId: string) {
     setError(null);
     startTransition(async () => {
       try {
-        await actualizarCondicionPago(orderId, formData);
+        await quitarProducto(orderId, itemId);
       } catch (err) {
-        setError(err instanceof Error ? err.message : "No se pudo actualizar la condición de pago.");
+        setError(err instanceof Error ? err.message : "No se pudo quitar el producto.");
       }
     });
   }
 
-  function handleDiscountRequest(itemId: string, e: React.FormEvent<HTMLFormElement>) {
+  function corregirCantidad(itemId: string, valor: string) {
+    const n = Number(valor);
+    if (!Number.isInteger(n) || n < 1) return;
+    setError(null);
+    startTransition(async () => {
+      try {
+        await cambiarCantidad(orderId, itemId, n);
+        setCantidadGuardada(itemId);
+        setTimeout(() => setCantidadGuardada((id) => (id === itemId ? null : id)), 2200);
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "No se pudo cambiar la cantidad.");
+      }
+    });
+  }
+
+  function pedirDescuento(itemId: string, e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
     const formData = new FormData(e.currentTarget);
     setError(null);
@@ -106,7 +158,7 @@ export function OrderItemComposer({
     });
   }
 
-  function handleSubmitOrder() {
+  function enviar() {
     setError(null);
     startTransition(async () => {
       try {
@@ -119,133 +171,276 @@ export function OrderItemComposer({
     });
   }
 
-  const totalPedido = items.reduce((acc, item) => acc + item.total, 0);
+  const total = items.reduce((acc, item) => acc + item.total, 0);
+  const unidades = items.reduce((acc, item) => acc + item.cantidad, 0);
 
   return (
-    <div className="flex flex-col gap-4">
-      {error && <p className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p>}
-      {submitResult && (
-        <div className="rounded-lg bg-green-50 px-3 py-2 text-sm text-green-800">
-          <p>Pedido enviado. Estado resultante: {submitResult.estadoResultado}.</p>
-          {submitResult.priceDrift.length > 0 && (
-            <p className="mt-1 text-amber-700">
-              El precio de {submitResult.priceDrift.length} línea(s) cambió desde que armaste el borrador — ya quedó
-              actualizado al precio vigente.
-            </p>
-          )}
-        </div>
-      )}
-
-      <form onSubmit={handlePaymentTerms} className="card flex flex-wrap items-end gap-3 p-4">
-        <div>
-          <label className="mb-1 block text-sm font-medium text-gray-700">Condición de pago</label>
-          <select name="paymentTermsId" defaultValue={currentPaymentTermsId} className="min-h-12 rounded-lg border border-gray-300 px-3 py-2">
-            {paymentTerms.map((p) => (
-              <option key={p.id} value={p.id}>
-                {p.nombre}
-              </option>
-            ))}
-          </select>
-        </div>
-        <button type="submit" className="btn-secondary" disabled={isPending}>
-          Actualizar
-        </button>
-      </form>
-
-      <form onSubmit={handleAddProduct} className="card flex flex-col gap-3 p-4">
-        <h3 className="font-semibold text-logisalud-green">Agregar producto</h3>
-        <input
-          type="text"
-          value={productQuery}
-          onChange={(e) => setProductQuery(e.target.value)}
-          placeholder="Buscar producto por nombre o código..."
-          className="min-h-12 rounded-lg border border-gray-300 px-3 py-2"
-        />
-        {products.length === 0 ? (
-          <p className="text-sm text-gray-500">No hay productos activos con precio vigente para agregar.</p>
-        ) : filteredProducts.length > 0 ? (
-          <select name="productId" required className="min-h-12 rounded-lg border border-gray-300 px-3 py-2">
-            <option value="">Selecciona un producto</option>
-            {filteredProducts.map((p) => (
-              <option key={p.id} value={p.id}>
-                {p.descripcion} ({p.codigo_interno})
-              </option>
-            ))}
-          </select>
-        ) : (
-          <p className="text-sm text-gray-500">Ningún producto coincide con esa búsqueda.</p>
+    <>
+      <div className="flex flex-col gap-4 pb-28">
+        {error && (
+          <p className="aviso-error" role="alert">
+            <IconError className="mt-0.5 h-4 w-4 shrink-0" />
+            <span>{error}</span>
+          </p>
         )}
-        <div className="flex items-center gap-3">
-          <input
-            name="cantidad"
-            type="number"
-            min="1"
-            step="1"
-            placeholder="Cantidad"
-            required
-            className="min-h-12 w-32 rounded-lg border border-gray-300 px-3 py-2"
-          />
-          <button type="submit" className="btn-secondary" disabled={isPending}>
-            Agregar
-          </button>
-        </div>
-      </form>
 
-      <div className="card p-4">
-        <h3 className="font-semibold text-logisalud-green">Productos</h3>
-        {items.length === 0 ? (
-          <p className="mt-2 text-sm text-gray-600">Todavía no agregaste productos.</p>
-        ) : (
-          <div className="mt-3 flex flex-col gap-2">
-            {items.map((item) => (
-              <div key={item.id} className="rounded-lg border border-gray-200 p-3">
-                <div className="flex items-center justify-between gap-3">
-                  <div>
-                    <p className="font-medium text-gray-900">{item.product?.descripcion}</p>
-                    <p className="text-sm text-gray-500">
-                      {item.cantidad} x {item.precio_unitario.toFixed(4)} — Total: {item.total.toFixed(2)} (IGV {item.igv.toFixed(2)})
-                    </p>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <button
-                      type="button"
-                      onClick={() => setDiscountFormItemId(discountFormItemId === item.id ? null : item.id)}
-                      className="text-sm text-logisalud-teal hover:underline"
-                    >
-                      Solicitar precio especial
-                    </button>
-                    <button type="button" onClick={() => handleRemove(item.id)} className="text-sm text-red-600 hover:underline" disabled={isPending}>
-                      Quitar
-                    </button>
-                  </div>
-                </div>
-
-                {discountFormItemId === item.id && (
-                  <form onSubmit={(e) => handleDiscountRequest(item.id, e)} className="mt-3 flex flex-col gap-2 rounded-lg bg-gray-50 p-3">
-                    <input type="hidden" name="cantidad" value={item.cantidad} />
-                    <div className="flex flex-wrap gap-2">
-                      <input name="precioSolicitado" type="number" step="0.0001" placeholder="Precio solicitado" className="min-h-10 rounded-lg border border-gray-300 px-2 py-1 text-sm" />
-                      <span className="self-center text-sm text-gray-500">o</span>
-                      <input name="porcentajeDescuento" type="number" step="0.01" placeholder="% descuento" className="min-h-10 rounded-lg border border-gray-300 px-2 py-1 text-sm" />
-                    </div>
-                    <textarea name="motivo" required placeholder="Motivo" className="rounded-lg border border-gray-300 px-2 py-1 text-sm" />
-                    <input name="competenciaNegociacion" placeholder="Competencia / negociación (opcional)" className="min-h-10 rounded-lg border border-gray-300 px-2 py-1 text-sm" />
-                    <input name="comentario" placeholder="Comentario (opcional)" className="min-h-10 rounded-lg border border-gray-300 px-2 py-1 text-sm" />
-                    <button type="submit" className="btn-secondary self-start text-sm" disabled={isPending}>
-                      Enviar solicitud
-                    </button>
-                  </form>
-                )}
-              </div>
-            ))}
-            <p className="mt-2 text-right font-semibold text-gray-900">Total: {totalPedido.toFixed(2)}</p>
+        {submitResult && (
+          <div className="aviso-ok" role="status">
+            <IconCheck className="mt-0.5 h-4 w-4 shrink-0" />
+            <div>
+              <p className="font-medium">Pedido enviado.</p>
+              {submitResult.priceDrift.length > 0 && (
+                <p className="mt-1">
+                  El precio de {submitResult.priceDrift.length}{" "}
+                  {submitResult.priceDrift.length === 1 ? "línea cambió" : "líneas cambiaron"} desde
+                  que armaste el borrador. Ya quedaron al precio vigente.
+                </p>
+              )}
+            </div>
           </div>
         )}
+
+        <section className="panel p-4" aria-labelledby="agregar-titulo">
+          <h2 id="agregar-titulo" className="text-lg text-slate-900">
+            Agregar producto
+          </h2>
+
+          {products.length === 0 ? (
+            <p className="mt-2 text-sm text-slate-600">
+              No hay productos activos con precio vigente para agregar. Revisá las listas de precios
+              en Maestros.
+            </p>
+          ) : (
+            <div className="mt-3 flex flex-col gap-3">
+              <Combobox
+                name="productId"
+                label="Producto"
+                selected={productoElegido}
+                onSelect={setProductoElegido}
+                onSearch={buscarProducto}
+                initialOptions={opciones.slice(0, 30)}
+                placeholder="Buscá por nombre o código..."
+                minSearchLength={1}
+                debounceMs={120}
+                emptyMessage="Ningún producto coincide"
+              />
+
+              <div className="flex items-end gap-2">
+                <div className="w-32">
+                  <label className="etiqueta" htmlFor="cantidad-nueva">
+                    Cantidad
+                  </label>
+                  <input
+                    id="cantidad-nueva"
+                    ref={cantidadRef}
+                    className="campo cifra"
+                    type="number"
+                    inputMode="numeric"
+                    min={1}
+                    step={1}
+                    value={cantidad}
+                    onChange={(e) => setCantidad(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") {
+                        e.preventDefault();
+                        agregar();
+                      }
+                    }}
+                  />
+                </div>
+                <button
+                  type="button"
+                  onClick={agregar}
+                  className="btn-primary flex-1 sm:flex-none sm:px-8"
+                  disabled={isPending}
+                >
+                  {isPending ? <IconSpinner className="h-5 w-5" /> : <IconPlus className="h-5 w-5" />}
+                  Agregar
+                </button>
+              </div>
+            </div>
+          )}
+        </section>
+
+        <section className="panel" aria-labelledby="lineas-titulo">
+          <div className="flex items-baseline justify-between px-4 pt-4">
+            <h2 id="lineas-titulo" className="text-lg text-slate-900">
+              Productos del pedido
+            </h2>
+            {items.length > 0 && (
+              <p className="cifra text-sm text-slate-600">
+                {items.length} {items.length === 1 ? "línea" : "líneas"} · {unidades} u.
+              </p>
+            )}
+          </div>
+
+          {items.length === 0 ? (
+            <p className="px-4 pb-4 pt-2 text-sm text-slate-600">
+              Todavía no agregaste productos. Buscá el primero arriba.
+            </p>
+          ) : (
+            <ul className="mt-3 divide-y divide-slate-200 border-t border-slate-200">
+              {items.map((item) => (
+                <li
+                  key={item.id}
+                  className={item.product_id === ultimaAgregada ? "linea-nueva" : undefined}
+                >
+                  <div className="px-4 py-3">
+                    <div className="flex items-start justify-between gap-3">
+                      <p className="min-w-0 font-medium leading-snug text-slate-900">
+                        {item.product
+                          ? displayNombreProducto(item.product.descripcion, item.product.codigo_interno)
+                          : "—"}
+                      </p>
+                      <p className="cifra shrink-0 font-semibold text-slate-900">
+                        {formatSoles(item.total)}
+                      </p>
+                    </div>
+                    <p className="cifra mt-0.5 text-sm text-slate-600">
+                      {item.product?.codigo_interno ?? "—"} · {formatSoles(item.precio_unitario)} c/u
+                    </p>
+
+                    <div className="mt-2 flex items-center gap-2">
+                      <label className="sr-only" htmlFor={`cant-${item.id}`}>
+                        Cantidad de {item.product?.descripcion ?? "la línea"}
+                      </label>
+                      <input
+                        id={`cant-${item.id}`}
+                        className="campo cifra h-11 min-h-11 w-[4.5rem] px-2 text-center"
+                        type="number"
+                        inputMode="numeric"
+                        min={1}
+                        step={1}
+                        defaultValue={item.cantidad}
+                        disabled={isPending}
+                        onBlur={(e) => {
+                          if (Number(e.target.value) !== item.cantidad) {
+                            corregirCantidad(item.id, e.target.value);
+                          }
+                        }}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter") e.currentTarget.blur();
+                        }}
+                      />
+                      {cantidadGuardada === item.id ? (
+                        <span
+                          className="flex items-center gap-1 text-sm font-medium text-[#276b3b]"
+                          role="status"
+                        >
+                          <IconCheck className="h-4 w-4" />
+                          Guardado
+                        </span>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setDiscountFormItemId(discountFormItemId === item.id ? null : item.id)
+                          }
+                          className="min-h-11 rounded-lg px-2 text-sm font-medium text-[#1c6d71] hover:bg-logisalud-teal/10"
+                        >
+                          Precio especial
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        onClick={() => quitar(item.id)}
+                        className="btn-ghost ml-auto hover:text-red-700"
+                        disabled={isPending}
+                        aria-label={`Quitar ${item.product?.descripcion ?? "la línea"} del pedido`}
+                      >
+                        <IconTrash className="h-5 w-5" />
+                      </button>
+                    </div>
+                  </div>
+
+                  {discountFormItemId === item.id && (
+                    <form
+                      onSubmit={(e) => pedirDescuento(item.id, e)}
+                      className="mx-4 mb-4 flex flex-col gap-2 rounded-lg bg-slate-50 p-3"
+                    >
+                      <input type="hidden" name="cantidad" value={item.cantidad} />
+                      <p className="text-sm text-slate-700">
+                        Pedir un precio especial no cambia el pedido: queda como solicitud para que
+                        la apruebe un aprobador comercial.
+                      </p>
+                      <div className="flex flex-wrap gap-2">
+                        <input
+                          name="precioSolicitado"
+                          type="number"
+                          step="0.0001"
+                          placeholder="Precio solicitado"
+                          className="campo cifra h-11 min-h-11 flex-1 text-sm"
+                        />
+                        <input
+                          name="porcentajeDescuento"
+                          type="number"
+                          step="0.01"
+                          placeholder="% descuento"
+                          className="campo cifra h-11 min-h-11 flex-1 text-sm"
+                        />
+                      </div>
+                      <textarea
+                        name="motivo"
+                        required
+                        rows={2}
+                        placeholder="Motivo (requerido)"
+                        className="campo min-h-0 py-2 text-sm"
+                      />
+                      <input
+                        name="competenciaNegociacion"
+                        placeholder="Competencia / negociación (opcional)"
+                        className="campo h-11 min-h-11 text-sm"
+                      />
+                      <input
+                        name="comentario"
+                        placeholder="Comentario (opcional)"
+                        className="campo h-11 min-h-11 text-sm"
+                      />
+                      <button
+                        type="submit"
+                        className="btn-secondary self-start text-sm"
+                        disabled={isPending}
+                      >
+                        Enviar solicitud
+                      </button>
+                    </form>
+                  )}
+                </li>
+              ))}
+            </ul>
+          )}
+        </section>
       </div>
 
-      <button type="button" onClick={handleSubmitOrder} className="btn-primary" disabled={isPending || items.length === 0}>
-        Enviar pedido
-      </button>
-    </div>
+      {/*
+        El total no se recalcula acá: se suman las líneas que grabó el
+        servidor, igual que el correo y el Excel, para que la pantalla no
+        pueda contradecir a la base.
+      */}
+      <div className="barra-pie pt-3">
+        <div className="mx-auto flex max-w-4xl items-center justify-between gap-4 px-4 sm:px-6">
+          <div>
+            <p className="text-sm text-slate-600">Total del pedido</p>
+            <p className="cifra text-2xl font-semibold leading-tight text-slate-900">
+              {formatSoles(total)}
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={enviar}
+            className="btn-primary min-w-[9rem]"
+            disabled={isPending || items.length === 0}
+          >
+            {isPending ? <IconSpinner className="h-5 w-5" /> : null}
+            Enviar pedido
+          </button>
+        </div>
+        {items.length === 0 && (
+          <p className="mx-auto max-w-4xl px-4 pt-1.5 text-sm text-slate-600 sm:px-6">
+            Agregá al menos un producto para poder enviarlo.
+          </p>
+        )}
+      </div>
+    </>
   );
 }

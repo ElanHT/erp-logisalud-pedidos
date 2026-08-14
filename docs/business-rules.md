@@ -28,6 +28,17 @@ trate como "a confirmar", no como reglas cerradas:
    (IGV, valor referencial, etc.). **No implementar lógica tributaria
    de bonificaciones sin esa confirmación.**
 
+   **Contrastar con Contabilidad si la bonificación debería ser inafecta
+   como regla general, o si estos 2 casos son simplemente un error de
+   captura en NubeFact — de 207 códigos de bonificación en su catálogo,
+   solo estos 2 aparecen como inafectos, sin patrón claro.**
+
+   Los dos casos son `BODHP109` (JAMOL 5) y `BODHP110` (GLICOFAST 1000).
+   Decisión del usuario (2026-08-14): se tratan como **posible error de
+   carga en NubeFact, no como regla**. `0052` aplica lo que dice el
+   catálogo porque es la fuente de verdad acordada, pero eso no zanja la
+   pregunta de fondo.
+
 2. **Umbral de retención evaluado por comprobante, no por pedido
    total.** El supuesto de trabajo es que la retención se calcula por
    cada comprobante emitido, no sobre la suma de un pedido que genere
@@ -134,6 +145,191 @@ decisiones de negocio:
   precios sigue siendo reimportar el Excel del proveedor en Listas de
   precios — la UI lo deja dicho para no generar confusión sobre cuál
   es el camino correcto.
+
+## Precios: las listas de canal YA INCLUYEN IGV
+
+**Confirmado por el usuario el 2026-08-13.** Los precios de las listas
+importadas —PVF Farma/Horizontal, PVF Mayorista/Top, PVF
+Instituciones/Clínicas, PVF Subdistribuidores, PVF Minicadenas— son
+**precio final al público**, no base imponible.
+
+Por lo tanto, para un producto GRAVADO:
+
+```
+total    = cantidad × precio_unitario          (NO se multiplica por 1.18)
+subtotal = total / (1 + tasa/100)              (base imponible, derivada)
+igv      = total − subtotal                    (por resta, no por producto)
+```
+
+Para INAFECTO no hay nada que derivar: `subtotal = total`, `igv = 0`.
+
+`subtotal` **no cambió de significado**: sigue siendo la base imponible, que
+es lo que el comprobante necesita como `total_gravada`. El IGV se saca por
+resta y no multiplicando la base, para que `subtotal + igv` dé exactamente
+el total y no quede un céntimo suelto por redondear las dos partes por
+separado.
+
+El `valor_unitario` del comprobante (que va **sin** IGV) también se deriva
+hacia atrás: `precio_unitario / (1 + tasa/100)`.
+
+### El bug que esto corrige (`0051`)
+
+Hasta `0051`, la lógica tomaba `price_list_items.precio` como base y le
+sumaba el 18% encima. **Todo pedido con productos GRAVADO salía con el total
+inflado un 18%.** Ejemplo real: 12 unidades a S/ 25.42 daban S/ 359.95 en
+vez de S/ 305.04.
+
+Estaba en cuatro lugares, y como el SQL es la capa autoritativa, arreglar
+solo el TypeScript no habría alcanzado:
+
+- `pedidos.submit_order` — recalcula todas las líneas al enviar.
+- `pedidos.decide_approval_request` — al aprobar un precio especial.
+- `calculateLineItem` en `domain/orders.ts`.
+- `buildComprobanteBorrador` en `domain/nubefact-draft.ts`.
+
+`pedidos.reevaluate_order` no recalcula líneas, así que no se tocó.
+
+`0051` incluye una auditoría que **solo informa**: cuenta las líneas ya
+grabadas cuyo total sigue la fórmula vieja y lo deja en un `raise notice`.
+No corrige datos: qué hacer con esos pedidos es decisión del usuario.
+
+## Bonificaciones: el prefijo `BO`
+
+**Confirmado por el usuario el 2026-08-13.** Los códigos que empiezan con
+`BO` son la versión de **bonificación** de su par regular (`BOBSA207` es la
+bonificación de `BSA207`), y ambos traen la **misma descripción exacta**. En
+pantalla se ven idénticos, y un vendedor puede agregar el equivocado sin
+darse cuenta.
+
+Se resuelve en presentación, sin tocar el dato: `displayNombreProducto`
+(`domain/products.ts`) agrega `(Bonificación)` al nombre cuando el código
+empieza con `BO`. Aplica en el buscador de productos, la lista de líneas del
+pedido, el detalle del pedido, el maestro de productos, la bandeja de
+Operaciones y el correo/Excel del pedido.
+
+**No aplica en los documentos fiscales.** La descripción del comprobante y
+de la guía es la del producto; marcar una bonificación ahí es una decisión
+tributaria (transferencia gratuita), no de interfaz, y está sin resolver.
+
+**Límite conocido:** la regla es el prefijo y nada más, así que un producto
+regular cuyo código empiece con `BO` se marcaría por error. Hoy no hay
+ninguno; si aparece, hay que endurecerlo exigiendo que exista el par sin el
+prefijo.
+
+## Reconciliación del catálogo contra NubeFact (`0052`)
+
+La fuente de verdad del catálogo es la cuenta de **NubeFact en producción**
+(RUC 20610284508). El export que entregó el usuario el 2026-08-13 trae **426
+filas**, y `0052` reconcilia contra él: actualiza `products.descripcion` y
+versiona `product_tax_profiles` cuando la afectación difiere.
+
+Mapeo de `TIPO DE AFECTACIÓN (IGV)`: `10` → GRAVADO 18%, `30` → INAFECTO 0%.
+
+Del catálogo, en números: **423 filas GRAVADO, 2 INAFECTO, 1 sin afectación**.
+Cero códigos duplicados y cero descripciones vacías.
+
+### `DSCTO1` no es un producto
+
+Es la única fila sin tipo de afectación, con unidad `NIU` y categoría
+`DESCUENTO`: es la **línea de descuento** que NubeFact usa al facturar, no un
+producto. Queda **excluida** de la reconciliación. Por eso `0052` trabaja con
+425 y no con 426.
+
+### Las 2 filas INAFECTO son ambas bonificaciones — revisar
+
+`BODHP109` (JAMOL 5) y `BODHP110` (GLICOFAST 1000) son las únicas dos
+INAFECTO del catálogo, y las dos son códigos `BO`. Sus pares regulares
+`DHP109` y `DHP110` **no existen en el catálogo**.
+
+Que solo 2 de 207 bonificaciones sean inafectas parece inconsistente: o el
+tratamiento correcto de una bonificación es inafecto y faltan 205, o esas dos
+están mal. **Sin confirmar.** `0052` aplica lo que dice el catálogo porque es
+la fuente de verdad acordada, pero esto merece revisión — se cruza con el
+supuesto pendiente #1 de Fase 6 (tratamiento tributario de bonificaciones).
+
+### 71 bonificaciones sin par regular en el catálogo
+
+De los 207 códigos `BO`, **71 no tienen su par sin prefijo** en el catálogo
+(por ejemplo `BOP000015`). No rompe nada —la regla de presentación es solo el
+prefijo— pero significa que para esos 71 no se puede verificar la premisa de
+que son "la bonificación de X".
+
+### 16 productos desactivados por no estar en NubeFact
+
+**Confirmado por el usuario el 2026-08-14** sobre el reporte de la vista
+previa. Estos 16 estaban activos en nuestro catálogo pero **no existen en el
+catálogo de NubeFact**, así que hoy no se pueden facturar:
+
+```
+DHP218  DHP219  DHP220  DHP221  DHP222  DHP223  DHP224  DHP225
+DHP226  DHP227  DHP228  DHP229  DHP421  DHP423  DHP424  PLGS14
+```
+
+Se **desactivan, no se borran**: es reversible. `0052` los pasa a
+`estado = 'inactivo'` y les escribe la razón en la columna nueva
+`products.nota_estado`, que el catálogo administrativo muestra:
+
+> Inactivo temporalmente — no está en el catálogo de NubeFact, no se puede
+> facturar. Contactar a quien administre la cuenta NubeFact para agregarlo.
+
+Dejan de aparecer en el buscador de "Nuevo pedido" porque esa pantalla ya
+filtra por `estado = 'activo'`. Además `addOrderItem` rechaza un producto
+inactivo aunque llegue por una petición armada a mano: la interfaz no es la
+garantía.
+
+Para reactivarlos alcanza con volverlos a `activo` y limpiar la nota, una vez
+que existan en NubeFact.
+
+### `DAPHA10-EJ`: borrado, con salvaguarda
+
+El placeholder de Fase 2, obsoleto desde la importación real de Diphasac.
+`0052` lo borra **solo si no tiene ninguna línea de pedido asociada**; si la
+tiene, lo deja inactivo con su nota, porque borrar un producto referenciado
+por un pedido rompería el histórico. Sus filas de `price_list_items` se van
+con él cuando se borra (esa tabla no tiene `on delete cascade`).
+
+### Los 279 códigos de NubeFact sin match: gap esperado
+
+De los 425 códigos del catálogo, **279 no existen en nuestro `products`**, en
+su mayoría bonificaciones `BO` y líneas de producto que no se importaron en
+Fase 3.
+
+**Queda sin acción a propósito.** No es un error de la reconciliación: es
+consecuencia de que **promociones y bonificaciones siguen diferidas desde
+Fase 3**, así que esas líneas nunca entraron al catálogo. Se resolverá cuando
+se implemente el motor de promociones/bonificaciones, no antes.
+
+Lo que sí importa mientras tanto: un pedido no puede incluir un producto que
+no existe en nuestro catálogo, así que este gap no puede generar un
+comprobante inválido. El riesgo va en la dirección contraria —productos
+nuestros que NubeFact no tiene— y eso es justamente lo que resuelve la
+desactivación de los 16.
+
+### Cómo ver el reporte antes de mergear
+
+`0052` imprime el reporte completo por `raise notice` al aplicarse (códigos
+sin match, qué productos cambian de afectación, cuántas descripciones se
+actualizaron). Para verlo **antes**, hay una consulta de solo lectura en
+[consultas/preview-reconciliacion-nubefact.sql](consultas/preview-reconciliacion-nubefact.sql).
+
+## Perfil tributario: la excepción DAPHA 10
+
+**Confirmado por el usuario el 2026-08-13.** Al reconciliar el catálogo
+contra el exportado de NubeFact (RUC 20610284508), estos diez códigos
+**quedan INAFECTOS pase lo que diga ese catálogo** — el catálogo de NubeFact
+tiene un error ahí:
+
+```
+DHP100  DHP101  DHP102  DHP105  DHP106
+BODHP100  BODHP101  BODHP102  BODHP105  BODHP106
+```
+
+Es toda la familia **DAPHA 10** y **DUO DAPHA 10**, con sus bonificaciones.
+
+Cualquier reconciliación futura contra NubeFact tiene que respetar esta
+lista. Si en algún momento se confirma que el catálogo de NubeFact se
+corrigió, hay que quitar la excepción explícitamente, no dejarla vencer en
+silencio.
 
 ## Fase 4 — Pedidos
 

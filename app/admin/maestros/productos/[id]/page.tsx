@@ -5,6 +5,8 @@ import { Breadcrumb } from "@/components/breadcrumb";
 import { EditProductForm } from "./edit-product-form";
 import { PriceCorrectionForm } from "./price-correction-form";
 import { editProduct, submitPriceCorrection } from "./actions";
+import { displayNombreProducto } from "@/domain/products";
+import { IconAlert } from "@/components/icons";
 
 function formatMoney(value: number | null | undefined): string {
   if (value === null || value === undefined) return "—";
@@ -30,17 +32,23 @@ export default async function ProductDetailPage({ params }: { params: { id: stri
           items={[
             { label: "Maestros", href: "/admin" },
             { label: "Productos", href: "/admin/maestros/productos" },
-            { label: product.descripcion },
+            { label: displayNombreProducto(product.descripcion, product.codigo_interno) },
           ]}
         />
         <h2 className="text-xl font-semibold">
-          {product.descripcion}{" "}
+          {displayNombreProducto(product.descripcion, product.codigo_interno)}{" "}
           <span className="text-base font-normal text-gray-500">({product.codigo_interno})</span>
         </h2>
         <p className="mt-1 text-sm text-gray-600">
           {product.supplier?.nombre ?? "Sin proveedor"} · {product.unidad_medida}
           {product.presentacion ? ` · ${product.presentacion}` : ""} · {product.estado}
         </p>
+        {product.nota_estado && (
+          <p className="mt-3 flex items-start gap-2.5 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2.5 text-sm text-amber-900">
+            <IconAlert className="mt-0.5 h-4 w-4 shrink-0" />
+            <span>{product.nota_estado}</span>
+          </p>
+        )}
       </div>
 
       {!product.hasCurrentPrice && (

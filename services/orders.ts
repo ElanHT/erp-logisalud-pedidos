@@ -3,6 +3,8 @@ import { createClient } from "@/lib/supabase/server";
 import { logAudit } from "./audit-log";
 import { notifyOrderSubmitted, type NotifyResult } from "./order-notifications";
 import { calculateLineItem, canEditPaymentTerms } from "@/domain/orders";
+import { MENSAJE_SIN_DIRECCION } from "@/domain/customers";
+import { evaluarCambioDeCliente, type ConflictoDePrecio } from "@/domain/order-header";
 
 export type OrderSummary = {
   id: string;
@@ -47,7 +49,12 @@ export type OrderDetail = OrderSummary & {
   customer_id: string;
   customer_address_id: string;
   payment_terms_id: number;
-  customer: { razon_social: string; canal_id: number | null; condicion_pago_habitual_id: number | null } | null;
+  customer: {
+    razon_social: string;
+    ruc_o_documento: string;
+    canal_id: number | null;
+    condicion_pago_habitual_id: number | null;
+  } | null;
   address: { direccion: string } | null;
   payment_terms: { nombre: string } | null;
   items: OrderItemRow[];
@@ -115,7 +122,7 @@ export async function getOrderDetail(orderId: string): Promise<OrderDetail | nul
     .select(
       `id, estado, fecha_creacion, fecha_envio, seller_id, customer_id, customer_address_id, payment_terms_id,
       seller:sellers(nombre_completo),
-      customer:customers(razon_social, canal_id, condicion_pago_habitual_id),
+      customer:customers(razon_social, ruc_o_documento, canal_id, condicion_pago_habitual_id),
       address:customer_addresses(direccion),
       payment_terms:payment_terms(nombre)`,
     )
@@ -155,7 +162,9 @@ export async function getOrderDetail(orderId: string): Promise<OrderDetail | nul
   };
 }
 
-export type AddOrderItemResult = { ok: true; itemId: string } | { ok: false; reason: "NO_PRICE" | "NO_TAX_PROFILE" | "NO_CHANNEL" };
+export type AddOrderItemResult =
+  | { ok: true; itemId: string }
+  | { ok: false; reason: "NO_PRICE" | "NO_TAX_PROFILE" | "NO_CHANNEL" | "PRODUCTO_INACTIVO" };
 
 /**
  * Agrega una línea al pedido en DRAFT. El precio mostrado acá es solo
@@ -170,6 +179,19 @@ export async function addOrderItem(input: {
   cantidad: number;
 }): Promise<AddOrderItemResult> {
   const supabase = createClient();
+
+  // Un producto inactivo no se puede facturar, así que tampoco se puede
+  // pedir. La pantalla ya no lo ofrece —filtra por estado— pero la Server
+  // Action recibe un productId cualquiera, y sin esto una petición armada a
+  // mano metería al pedido algo que después no se puede emitir.
+  const { data: product, error: productError } = await supabase
+    .from("products")
+    .select("estado")
+    .eq("id", input.productId)
+    .maybeSingle();
+  if (productError) throw new Error(productError.message);
+  if (!product) throw new Error("El producto no existe o no es visible.");
+  if (product.estado !== "activo") return { ok: false, reason: "PRODUCTO_INACTIVO" };
 
   const { data: customer, error: customerError } = await supabase
     .from("customers")
@@ -321,4 +343,271 @@ export async function repeatLastOrder(sellerId: string, actor: string) {
   }
 
   return draft;
+}
+
+/**
+ * Edición del encabezado de un pedido en borrador.
+ *
+ * El vendedor tiene que poder corregir cliente, dirección o condición de
+ * pago DESPUÉS de haber cargado líneas, sin perder ese trabajo. Ninguna de
+ * estas funciones toca `order_items`.
+ *
+ * La condición de pago ya tiene su propia función (`updateOrderPaymentTerms`).
+ * Acá van las otras dos.
+ */
+
+/** Cambiar la dirección de entrega no afecta precios: es libre. */
+export async function updateOrderAddress(input: {
+  orderId: string;
+  customerAddressId: string;
+  actor: string;
+}): Promise<void> {
+  const supabase = createClient();
+
+  const { data: order, error: orderError } = await supabase
+    .from("orders")
+    .select("id, estado, customer_id")
+    .eq("id", input.orderId)
+    .maybeSingle();
+  if (orderError) throw new Error(orderError.message);
+  if (!order) throw new Error("El pedido no existe o no es visible.");
+  if (order.estado !== "DRAFT") {
+    throw new Error("Solo se puede cambiar la dirección mientras el pedido está en borrador.");
+  }
+
+  // La dirección tiene que ser del mismo cliente y estar activa: si no, se
+  // podría apuntar el despacho a la dirección de otro.
+  const { data: address, error: addressError } = await supabase
+    .from("customer_addresses")
+    .select("id")
+    .eq("id", input.customerAddressId)
+    .eq("customer_id", order.customer_id)
+    .eq("estado", "activo")
+    .maybeSingle();
+  if (addressError) throw new Error(addressError.message);
+  if (!address) throw new Error("Esa dirección no pertenece al cliente del pedido o no está activa.");
+
+  const { error } = await supabase
+    .from("orders")
+    .update({ customer_address_id: input.customerAddressId })
+    .eq("id", input.orderId);
+  if (error) throw new Error(error.message);
+
+  await logAudit({
+    actor: input.actor,
+    accion: "cambiar_direccion_pedido",
+    entidad: "orders",
+    entidadId: input.orderId,
+    datosDespues: { customer_address_id: input.customerAddressId },
+  });
+}
+
+/**
+ * Precio vigente de un producto para el canal de un cliente, o null si ese
+ * canal no lo tiene. Misma resolución que usa `addOrderItem`: producto +
+ * canal + `vigente_hasta is null`.
+ */
+async function resolvePreciosParaCliente(
+  customerId: string,
+  productIds: string[],
+): Promise<Map<string, number | null>> {
+  const supabase = createClient();
+  const precios = new Map<string, number | null>();
+  if (productIds.length === 0) return precios;
+
+  const { data: customer, error: customerError } = await supabase
+    .from("customers")
+    .select("canal_id")
+    .eq("id", customerId)
+    .maybeSingle();
+  if (customerError) throw new Error(customerError.message);
+  if (!customer) throw new Error("El cliente no existe o no es visible para vos.");
+
+  // Sin canal no hay lista de precios posible: todo queda sin precio, que
+  // es justamente lo que el bloqueo tiene que reportar.
+  if (!customer.canal_id) {
+    for (const id of productIds) precios.set(id, null);
+    return precios;
+  }
+
+  const { data, error } = await supabase
+    .from("price_list_items")
+    .select("product_id, precio")
+    .eq("sales_channel_id", customer.canal_id)
+    .is("vigente_hasta", null)
+    .in("product_id", productIds);
+  if (error) throw new Error(error.message);
+
+  for (const id of productIds) precios.set(id, null);
+  for (const row of (data ?? []) as Array<{ product_id: string; precio: number }>) {
+    precios.set(row.product_id, row.precio);
+  }
+  return precios;
+}
+
+export type CambioClienteResult =
+  | { ok: true }
+  | { ok: false; conflictos: ConflictoDePrecio[] };
+
+/**
+ * Cambia el cliente de un borrador **solo si ninguna línea cambia de
+ * precio** — decisión de negocio tomada con el usuario. El precio se
+ * resuelve por el canal del cliente, así que un cliente de otro canal
+ * dejaría el pedido con precios que no le corresponden.
+ *
+ * No borra ni reprecia líneas: o el cambio es inocuo y se aplica, o se
+ * rechaza con el detalle de qué producto lo impide.
+ */
+export async function changeOrderCustomer(input: {
+  orderId: string;
+  customerId: string;
+  customerAddressId: string;
+  actor: string;
+}): Promise<CambioClienteResult> {
+  const supabase = createClient();
+
+  const { data: order, error: orderError } = await supabase
+    .from("orders")
+    .select("id, estado, customer_id")
+    .eq("id", input.orderId)
+    .maybeSingle();
+  if (orderError) throw new Error(orderError.message);
+  if (!order) throw new Error("El pedido no existe o no es visible.");
+  if (order.estado !== "DRAFT") {
+    throw new Error("Solo se puede cambiar el cliente mientras el pedido está en borrador.");
+  }
+
+  const { data: items, error: itemsError } = await supabase
+    .from("order_items")
+    .select("id, product_id, precio_unitario, product:products(descripcion, codigo_interno)")
+    .eq("order_id", input.orderId);
+  if (itemsError) throw new Error(itemsError.message);
+
+  const lineas = (items ?? []) as unknown as Array<{
+    id: string;
+    product_id: string;
+    precio_unitario: number;
+    product: { descripcion: string; codigo_interno: string } | null;
+  }>;
+
+  const precios = await resolvePreciosParaCliente(
+    input.customerId,
+    lineas.map((l) => l.product_id),
+  );
+
+  const evaluacion = evaluarCambioDeCliente(
+    lineas.map((l) => ({
+      itemId: l.id,
+      codigo: l.product?.codigo_interno ?? "—",
+      descripcion: l.product?.descripcion ?? "—",
+      precioActual: l.precio_unitario,
+      precioConNuevoCliente: precios.get(l.product_id) ?? null,
+    })),
+  );
+
+  if (!evaluacion.permitido) return { ok: false, conflictos: evaluacion.conflictos };
+
+  // La dirección tiene que ser del cliente NUEVO y estar activa.
+  const { data: address, error: addressError } = await supabase
+    .from("customer_addresses")
+    .select("id")
+    .eq("id", input.customerAddressId)
+    .eq("customer_id", input.customerId)
+    .eq("estado", "activo")
+    .maybeSingle();
+  if (addressError) throw new Error(addressError.message);
+  if (!address) throw new Error(MENSAJE_SIN_DIRECCION);
+
+  const { error } = await supabase
+    .from("orders")
+    .update({ customer_id: input.customerId, customer_address_id: input.customerAddressId })
+    .eq("id", input.orderId);
+  if (error) throw new Error(error.message);
+
+  await logAudit({
+    actor: input.actor,
+    accion: "cambiar_cliente_pedido",
+    entidad: "orders",
+    entidadId: input.orderId,
+    datosAntes: { customer_id: order.customer_id },
+    datosDespues: {
+      customer_id: input.customerId,
+      customer_address_id: input.customerAddressId,
+    },
+  });
+
+  return { ok: true };
+}
+
+/**
+ * Cambiar la cantidad de una línea ya cargada.
+ *
+ * Corregir un "10" que debía ser "12" es la corrección más frecuente del
+ * vendedor, y hacerla con quitar + volver a agregar le cuesta buscar el
+ * producto de nuevo, parado y con el cliente esperando.
+ *
+ * Recalcula con el precio YA GRABADO en la línea, no con el vigente: subir
+ * la cantidad no es el momento de repreciar en silencio. La deriva de
+ * precios se resuelve donde siempre, al enviar (`submitOrder`), que la
+ * detecta y la informa.
+ */
+export async function updateOrderItemQuantity(input: {
+  orderId: string;
+  itemId: string;
+  cantidad: number;
+  actor: string;
+}): Promise<void> {
+  if (!Number.isInteger(input.cantidad) || input.cantidad < 1) {
+    throw new Error("La cantidad tiene que ser un número entero de 1 o más.");
+  }
+
+  const supabase = createClient();
+
+  const { data: order, error: orderError } = await supabase
+    .from("orders")
+    .select("estado")
+    .eq("id", input.orderId)
+    .maybeSingle();
+  if (orderError) throw new Error(orderError.message);
+  if (!order) throw new Error("El pedido no existe o no es visible.");
+  if (order.estado !== "DRAFT") {
+    throw new Error("Solo se pueden cambiar cantidades mientras el pedido está en borrador.");
+  }
+
+  const { data: item, error: itemError } = await supabase
+    .from("order_items")
+    .select("id, cantidad, precio_unitario, afectacion_tributaria, tasa_igv")
+    .eq("id", input.itemId)
+    .eq("order_id", input.orderId)
+    .maybeSingle();
+  if (itemError) throw new Error(itemError.message);
+  if (!item) throw new Error("Esa línea no pertenece a este pedido.");
+
+  const line = calculateLineItem({
+    cantidad: input.cantidad,
+    precioVigente: item.precio_unitario,
+    afectacionTributaria: item.afectacion_tributaria as "GRAVADO" | "INAFECTO",
+    tasaAplicable: item.tasa_igv,
+  });
+  if (!line.ok) throw new Error("No se pudo recalcular la línea con esa cantidad.");
+
+  const { error } = await supabase
+    .from("order_items")
+    .update({
+      cantidad: input.cantidad,
+      subtotal: line.subtotal,
+      igv: line.igv,
+      total: line.total,
+    })
+    .eq("id", input.itemId);
+  if (error) throw new Error(error.message);
+
+  await logAudit({
+    actor: input.actor,
+    accion: "cambiar_cantidad_linea",
+    entidad: "order_items",
+    entidadId: input.itemId,
+    datosAntes: { cantidad: item.cantidad },
+    datosDespues: { cantidad: input.cantidad },
+  });
 }
